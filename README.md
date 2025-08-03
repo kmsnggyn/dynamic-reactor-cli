@@ -24,23 +24,23 @@ The tool is built with a modular architecture for maintainability and extensibil
 │              └─────────────┬───────────────────────┘            │
 │                            │ coordinates analysis               │
 │                            │                                    │
-│    ┌──────────────────┐    │    ┌─────────────────┐            │
-│    │ analysis_engine  │<───┼───>│ plot_generator  │            │
-│    │                  │    │    │                 │            │
-│    │ • Data loading   │    │    │ • Temperature   │            │
-│    │ • Ramp detection │    │    │ • Stability     │            │
-│    │ • Steady state   │    │    │ • Spatial       │            │
-│    │ • Calculations   │    │    │ • 3D plots      │            │
-│    └─────────┬────────┘    │    └─────────────────┘            │
-│              │             │                                   │
-│              │    ┌────────┴────────┐                         │
-│              └───>│ results_manager │                         │
-│                   │                 │                         │
-│                   │ • CSV export    │                         │
-│                   │ • Comparison    │                         │
-│                   │ • File mgmt     │                         │
-│                   │ • Config        │                         │
-│                   └─────────────────┘                         │
+│    ┌──────────────────┐    │    ┌─────────────────┐             │
+│    │ analysis_engine  │<───┼───>│ plot_generator  │             │
+│    │                  │    │    │                 │             │
+│    │ • Data loading   │    │    │ • Temperature   │             │
+│    │ • Ramp detection │    │    │ • Stability     │             │
+│    │ • Steady state   │    │    │ • Spatial       │             │
+│    │ • Calculations   │    │    │ • 3D plots      │             │
+│    └─────────┬────────┘    │    └─────────────────┘             │
+│              │             │                                    │
+│              │    ┌────────┴────────┐                           │ 
+│              └───>│ results_manager │                           │
+│                   │                 │                           │
+│                   │ • CSV export    │                           │
+│                   │ • Comparison    │                           │
+│                   │ • File mgmt     │                           │
+│                   │ • Config        │                           │
+│                   └─────────────────┘                           │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -122,17 +122,50 @@ The code is now organized into clean, reusable modules:
 
 ## How to Use
 
-### 1. **Launch the Application**
+### 1. **Prepare Data in Aspen Plus**
+
+Before using this tool, you need to set up a flowsheet form in Aspen Plus and export the data:
+
+#### **Step 1.1: Create Flowsheet Form**
+1. In Aspen Plus, create a **Flowsheet Form** (Profile Plot or Table)
+2. Set up the form with:
+   - **X-axis**: Reactor length profile `L_Profile(*)`
+   - **Y-axis variables** (add as separate series):
+     - `T_cat(*)~1` - Catalyst temperature profile
+     - `T(*)~1` - Gas temperature profile  
+     - `Q_flux(*)~1` - Heat flux profile
+     - `Q_cat(*)~1` - Heat transfer to catalyst profile
+     - `iRxnModel.Rate(1,*).("<reaction-name>")` - Reaction rate profile
+3. Configure the form to display all reactor positions along the length
+
+#### **Step 1.2: Run Dynamic Simulation**
+1. Execute your dynamic simulation with the desired ramp conditions
+2. Ensure the simulation completes successfully
+3. The flowsheet form will populate with time-series data
+
+#### **Step 1.3: Export Data to CSV**
+1. Open the completed flowsheet form/table
+2. **Select All** data in the table (Ctrl+A)
+3. **Copy** the entire table (Ctrl+C)
+4. **Paste** into a new CSV file using a text editor or Excel
+5. **Save** the file with the naming convention: `{duration}-{direction}-{curve}.csv`
+
+**Example filenames:**
+- `30-up-r.csv` - 30-minute linear ramp-up
+- `45-down-s.csv` - 45-minute sinusoidal ramp-down
+- `60-up-s.csv` - 60-minute sinusoidal ramp-up
+
+### 2. **Launch the Application**
 ```bash
 python main_gui.py
 ```
 
-### 2. **Select Your Data File**
+### 3. **Select Your Data File**
 - Click "Select Aspen CSV File"
-- Choose your Aspen Plus dynamic simulation CSV export
+- Choose your exported Aspen Plus CSV file
 - The filename will be displayed once selected
 
-### 3. **Configure Analysis Options**
+### 4. **Configure Analysis Options**
 - **Time Limit**: Enter a maximum time (in minutes) to analyze, or leave empty for full range
 - **Save Results**: Check to automatically save analysis results to files
 - **Plot Selection**: Choose which plot types to generate:
@@ -141,12 +174,12 @@ python main_gui.py
   - **Spatial Temperature Gradients** (comprehensive analysis)
   - **3D Heat Transfer Analysis** (if heat transfer data available)
 
-### 4. **Run Analysis**
+### 5. **Run Analysis**
 - Click "Run Analysis" to start
 - Progress bar and status updates will show analysis progress
 - Multiple plot windows will open when complete
 
-### 5. **Save Results** (Optional)
+### 6. **Save Results** (Optional)
 - If auto-save was enabled, results are saved automatically
 - Use "Save Last Results" button to save results from previous analysis
 - Saved files include:
@@ -156,11 +189,30 @@ python main_gui.py
 
 ## File Format Requirements
 
-The tool expects Aspen Plus CSV exports with the following structure:
+The tool expects CSV files exported from Aspen Plus Flowsheet Forms with the following structure:
+
+### **Required Data Structure:**
 - **Row 0**: "Time" header
-- **Row 2**: Time value + position headers
-- **Rows 3-7**: 5 variable rows (T_cat, T, Reaction Rate, Heat Transfer to Catalyst, Heat Transfer with coolant)
+- **Row 2**: Time value + reactor position headers (`L_Profile(*)`)
+- **Rows 3-7**: Variable data rows containing:
+  - `T_cat(*)~1` - Catalyst temperature profile
+  - `T(*)~1` - Gas temperature profile
+  - `iRxnModel.Rate(1,*).("<reaction-name>")` - Reaction rate profile
+  - `Q_cat(*)~1` - Heat transfer to catalyst profile
+  - `Q_flux(*)~1` - Heat transfer with coolant profile
 - **Pattern repeats** every 6 rows for each time point
+
+### **Variable Names Expected:**
+The tool automatically detects these variable patterns:
+- **Temperature**: `T_cat`, `T` (catalyst and gas temperatures)
+- **Reaction Rate**: `Rate`, `iRxnModel.Rate` (reaction kinetics)
+- **Heat Transfer**: `Q_cat`, `Q_flux` (heat transfer profiles)
+
+### **Export Requirements:**
+1. **Complete time series**: Include all time points from your dynamic simulation
+2. **All spatial positions**: Include all reactor length positions
+3. **Consistent formatting**: Use the standard Aspen Plus table export format
+4. **Proper filename**: Follow the naming convention for automatic parameter detection
 
 ## Automatic Ramp Detection
 
@@ -215,7 +267,13 @@ Results are saved to a folder named `{filename}_ramp_analysis/` containing:
 
 ## Troubleshooting
 
-### Common Issues:
+### **Aspen Plus Data Export Issues:**
+1. **"Variable not found"**: Ensure all required variables are included in your flowsheet form
+2. **"Inconsistent data structure"**: Verify the CSV export includes time, position, and all variable profiles
+3. **"No reactor positions detected"**: Check that `L_Profile(*)` is properly set as the spatial coordinate
+4. **"Missing time data"**: Ensure the dynamic simulation completed and time series data is available
+
+### **Common Application Issues:**
 1. **"No file selected"**: Click "Select Aspen CSV File" first
 2. **"No plots selected"**: Check at least one plot type checkbox
 3. **"Analysis failed"**: Check console output for detailed error messages
@@ -254,8 +312,16 @@ The modular architecture makes it easy to add:
 ## Support
 
 For questions or issues:
+
+### **Aspen Plus Setup:**
+1. Verify your flowsheet form includes all required variables (`T_cat`, `T`, `Q_cat`, `Q_flux`, reaction rates)
+2. Ensure `L_Profile(*)` is properly configured as the reactor length coordinate
+3. Check that your dynamic simulation completed successfully before data export
+4. Confirm the CSV export includes complete time-series data
+
+### **Application Issues:**
 1. Check the console output for detailed error messages
-2. Verify your CSV file format matches Aspen Plus export structure
+2. Verify your CSV file format matches the expected Aspen Plus export structure
 3. Try with a smaller time range if experiencing performance issues
 4. Review the analysis summary in the console for parameter detection results
 
