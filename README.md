@@ -16,23 +16,31 @@ The tool is built with a modular architecture for maintainability and extensibil
 │                        ANALYSIS WORKFLOW                        │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
-│  ┌─────────────┐    ┌──────────────────┐    ┌─────────────────┐ │
-│  │  main_gui   │───▶│  analysis_engine │───▶│  plot_generator │ │
-│  │             │    │                  │    │                 │ │
-│  │ • GUI       │    │ • Data loading   │    │ • Temperature   │ │
-│  │ • Controls  │    │ • Ramp detection │    │ • Stability     │ │
-│  │ • Progress  │    │ • Steady state   │    │ • Spatial       │ │
-│  │ • Display   │    │ • Calculations   │    │ • 3D plots      │ │
-│  └─────────────┘    └──────────────────┘    └─────────────────┘ │
-│         │                                             │          │
-│         │            ┌──────────────────┐            │          │
-│         └───────────▶│ results_manager  │◀───────────┘          │
-│                      │                  │                       │
-│                      │ • CSV export     │                       │
-│                      │ • Comparison     │                       │
-│                      │ • File management│                       │
-│                      │ • Configuration  │                       │
-│                      └──────────────────┘                       │
+│              ┌─────────────────────────────────────┐            │
+│              │             main_gui                │            │
+│              │ • User interface & controls         │            │
+│              │ • File selection & options          │            │
+│              │ • Progress tracking & display       │            │
+│              └─────────────┬───────────────────────┘            │
+│                            │ coordinates analysis               │
+│                            ▼                                    │
+│    ┌──────────────────┐    │    ┌─────────────────┐            │
+│    │ analysis_engine  │◀───┼───▶│ plot_generator  │            │
+│    │                  │    │    │                 │            │
+│    │ • Data loading   │    │    │ • Temperature   │            │
+│    │ • Ramp detection │    │    │ • Stability     │            │
+│    │ • Steady state   │    │    │ • Spatial       │            │
+│    │ • Calculations   │    │    │ • 3D plots      │            │
+│    └─────────┬────────┘    │    └─────────────────┘            │
+│              │             │                                   │
+│              │    ┌────────▼────────┐                         │
+│              └───▶│ results_manager │                         │
+│                   │                 │                         │
+│                   │ • CSV export    │                         │
+│                   │ • Comparison    │                         │
+│                   │ • File mgmt     │                         │
+│                   │ • Config        │                         │
+│                   └─────────────────┘                         │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
