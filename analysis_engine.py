@@ -87,142 +87,183 @@ class AnalysisOptions:
     heat_transfer_3d: bool = True
     time_limit: Optional[float] = None
 
-class DataLoader:
-    """Handles loading and parsing of different data formats"""
+# Import data loading functionality from dedicated module
+try:
+    from data_loader import DataLoaderManager, load_and_parse_aspen_data, parse_ramp_parameters_from_filename
+    print("Using new modular data loader")
     
-    @staticmethod
-    def load_and_parse_aspen_data(file_path: str) -> Optional[Dict[str, Any]]:
-        """Load raw Aspen CSV file and parse into vectors and matrices structure"""
-        if not file_path:
-            return None
+    # Create wrapper class for compatibility
+    class DataLoader:
+        """Wrapper for new data loader functionality"""
         
-        print(f"Loading: {os.path.basename(file_path)}")
+        @staticmethod
+        def load_and_parse_aspen_data(file_path: str) -> Optional[Dict[str, Any]]:
+            """Load Aspen data using new data loader"""
+            return load_and_parse_aspen_data(file_path)
         
-        try:
-            # Load raw CSV
-            df = pd.read_csv(file_path, header=None)
-            print(f"Raw data shape: {df.shape}")
+        @staticmethod
+        def parse_ramp_parameters_from_filename(file_path: str) -> RampParameters:
+            """Parse ramp parameters using new data loader"""
+            return parse_ramp_parameters_from_filename(file_path)
+        
+        @staticmethod
+        def load_data_auto_detect(file_path: str) -> Optional[Dict[str, Any]]:
+            """Auto-detect file format using new data loader"""
+            loader = DataLoaderManager()
+            data_package = loader.load_data(file_path)
             
-            # Extract Length vector from row 2 (positions)
-            position_row = df.iloc[2]
-            length_vector = pd.to_numeric(position_row[1:], errors='coerce')
-            length_vector = length_vector[~np.isnan(length_vector)]
+            if data_package is None:
+                return None
             
-            print(f"Length vector: {len(length_vector)} positions from {length_vector.min():.3f} to {length_vector.max():.3f} m")
-            
-            # Find all time rows
-            time_values = []
-            time_row_indices = []
-            
-            for i in range(2, len(df), 6):
-                if i < len(df):
-                    time_val = pd.to_numeric(df.iloc[i, 0], errors='coerce')
-                    if not np.isnan(time_val):
-                        time_values.append(time_val)
-                        time_row_indices.append(i)
-            
-            time_vector = np.array(time_values)
-            print(f"Time vector: {len(time_vector)} points from {time_vector.min():.3f} to {time_vector.max():.3f} min")
-            
-            # Expected variables
-            expected_variables = [
-                "T_cat (°C)",
-                "T (°C)",
-                "Reaction Rate (kmol/m3/hr)",
-                "Heat Transfer to Catalyst (GJ/m3/hr)",
-                "Heat Transfer with coolant (kW/m2)"
-            ]
-            
-            # Initialize matrices
-            n_time = len(time_vector)
-            m_length = len(length_vector)
-            variables = {}
-            
-            for var_name in expected_variables:
-                variables[var_name] = np.full((n_time, m_length), np.nan)
-            
-            # Parse the data
-            for t_idx, time_row_idx in enumerate(time_row_indices):
-                if t_idx >= n_time:
-                    break
-                
-                for var_idx in range(len(expected_variables)):
-                    data_row_idx = time_row_idx + 1 + var_idx
-                    
-                    if data_row_idx < len(df):
-                        row_data = df.iloc[data_row_idx, 1:1+m_length].values
-                        row_data = pd.to_numeric(row_data, errors='coerce')
-                        variables[expected_variables[var_idx]][t_idx, :] = row_data
-            
-            # Data structure summary
-            print(f"\n=== Data Structure Created ===")
-            print(f"Time vector: shape ({len(time_vector)},)")
-            print(f"Length vector: shape ({len(length_vector)},)")
-            print(f"Variable matrices: shape ({n_time}, {m_length})")
-            
-            data_package = {
-                'time_vector': time_vector,
-                'length_vector': length_vector,
-                'variables': variables,
+            # Convert to legacy format for compatibility
+            return {
+                'time_vector': data_package.time_vector,
+                'length_vector': data_package.length_vector,
+                'variables': data_package.variables,
                 'file_path': file_path,
-                'dimensions': {'n_time': n_time, 'm_length': m_length},
-                'format_type': 'aspen_csv'
+                'dimensions': data_package.metadata.dimensions,
+                'format_type': data_package.metadata.format_type.value
             }
-            
-            return data_package
-            
-        except Exception as e:
-            print(f"Error loading data: {e}")
-            return None
+
+except ImportError:
+    print("Warning: Could not import new data loader, using legacy implementation")
     
-    @staticmethod
-    def parse_ramp_parameters_from_filename(file_path: str) -> RampParameters:
-        """Parse ramp parameters from filename convention: {duration}-{direction}-{curve_shape}"""
-        filename = os.path.basename(file_path).lower()
-        filename_parts = filename.replace('.csv', '').split('-')
+    class DataLoader:
+        """Legacy data loader implementation"""
         
-        # Remove timestamp parts
-        clean_parts = []
-        for part in filename_parts:
-            if not (part.isdigit() and len(part) >= 4):
-                clean_parts.append(part)
-        
-        ramp_params = RampParameters()
-        
-        if len(clean_parts) >= 3:
+        @staticmethod
+        def load_and_parse_aspen_data(file_path: str) -> Optional[Dict[str, Any]]:
+            """Load raw Aspen CSV file and parse into vectors and matrices structure"""
+            if not file_path:
+                return None
+            
+            print(f"Loading: {os.path.basename(file_path)}")
+            
             try:
-                ramp_params.duration = int(clean_parts[0])
-                ramp_params.direction = clean_parts[1]
-                ramp_params.curve_shape = clean_parts[2]
-            except (ValueError, IndexError):
-                print(f"Warning: Could not parse filename format: {filename}")
-        else:
-            # Fallback detection
-            if "up" in filename:
-                ramp_params.direction = "up"
-            elif "down" in filename:
-                ramp_params.direction = "down"
-        
-        return ramp_params
-    
-    @staticmethod
-    def load_data_auto_detect(file_path: str) -> Optional[Dict[str, Any]]:
-        """Auto-detect file format and load accordingly"""
-        file_ext = os.path.splitext(file_path)[1].lower()
-        
-        if file_ext == '.csv':
-            # Try Aspen format first
-            data_package = DataLoader.load_and_parse_aspen_data(file_path)
-            if data_package is not None:
+                # Load raw CSV
+                df = pd.read_csv(file_path, header=None)
+                print(f"Raw data shape: {df.shape}")
+                
+                # Extract Length vector from row 2 (positions)
+                position_row = df.iloc[2]
+                length_vector = pd.to_numeric(position_row[1:], errors='coerce')
+                length_vector = length_vector[~np.isnan(length_vector)]
+                
+                print(f"Length vector: {len(length_vector)} positions from {length_vector.min():.3f} to {length_vector.max():.3f} m")
+                
+                # Find all time rows
+                time_values = []
+                time_row_indices = []
+                
+                for i in range(2, len(df), 6):
+                    if i < len(df):
+                        time_val = pd.to_numeric(df.iloc[i, 0], errors='coerce')
+                        if not np.isnan(time_val):
+                            time_values.append(time_val)
+                            time_row_indices.append(i)
+                
+                time_vector = np.array(time_values)
+                print(f"Time vector: {len(time_vector)} points from {time_vector.min():.3f} to {time_vector.max():.3f} min")
+                
+                # Expected variables
+                expected_variables = [
+                    "T_cat (°C)",
+                    "T (°C)",
+                    "Reaction Rate (kmol/m3/hr)",
+                    "Heat Transfer to Catalyst (GJ/m3/hr)",
+                    "Heat Transfer with coolant (kW/m2)"
+                ]
+                
+                # Initialize matrices
+                n_time = len(time_vector)
+                m_length = len(length_vector)
+                variables = {}
+                
+                for var_name in expected_variables:
+                    variables[var_name] = np.full((n_time, m_length), np.nan)
+                
+                # Parse the data
+                for t_idx, time_row_idx in enumerate(time_row_indices):
+                    if t_idx >= n_time:
+                        break
+                    
+                    for var_idx in range(len(expected_variables)):
+                        data_row_idx = time_row_idx + 1 + var_idx
+                        
+                        if data_row_idx < len(df):
+                            row_data = df.iloc[data_row_idx, 1:1+m_length].values
+                            row_data = pd.to_numeric(row_data, errors='coerce')
+                            variables[expected_variables[var_idx]][t_idx, :] = row_data
+                
+                # Data structure summary
+                print(f"\n=== Data Structure Created ===")
+                print(f"Time vector: shape ({len(time_vector)},)")
+                print(f"Length vector: shape ({len(length_vector)},)")
+                print(f"Variable matrices: shape ({n_time}, {m_length})")
+                
+                data_package = {
+                    'time_vector': time_vector,
+                    'length_vector': length_vector,
+                    'variables': variables,
+                    'file_path': file_path,
+                    'dimensions': {'n_time': n_time, 'm_length': m_length},
+                    'format_type': 'aspen_csv'
+                }
+                
                 return data_package
-            
-            # Add other CSV format detection here in the future
-            print(f"Warning: Could not parse CSV file in any known format")
-            return None
+                
+            except Exception as e:
+                print(f"Error loading data: {e}")
+                return None
         
-        # Add other file format support here (Excel, JSON, etc.)
-        print(f"Warning: Unsupported file format: {file_ext}")
-        return None
+        @staticmethod
+        def parse_ramp_parameters_from_filename(file_path: str) -> RampParameters:
+            """Parse ramp parameters from filename convention: {duration}-{direction}-{curve_shape}"""
+            filename = os.path.basename(file_path).lower()
+            filename_parts = filename.replace('.csv', '').split('-')
+            
+            # Remove timestamp parts
+            clean_parts = []
+            for part in filename_parts:
+                if not (part.isdigit() and len(part) >= 4):
+                    clean_parts.append(part)
+            
+            ramp_params = RampParameters()
+            
+            if len(clean_parts) >= 3:
+                try:
+                    ramp_params.duration = int(clean_parts[0])
+                    ramp_params.direction = clean_parts[1]
+                    ramp_params.curve_shape = clean_parts[2]
+                except (ValueError, IndexError):
+                    print(f"Warning: Could not parse filename format: {filename}")
+            else:
+                # Fallback detection
+                if "up" in filename:
+                    ramp_params.direction = "up"
+                elif "down" in filename:
+                    ramp_params.direction = "down"
+            
+            return ramp_params
+        
+        @staticmethod
+        def load_data_auto_detect(file_path: str) -> Optional[Dict[str, Any]]:
+            """Auto-detect file format and load accordingly"""
+            file_ext = os.path.splitext(file_path)[1].lower()
+            
+            if file_ext == '.csv':
+                # Try Aspen format first
+                data_package = DataLoader.load_and_parse_aspen_data(file_path)
+                if data_package is not None:
+                    return data_package
+                
+                # Add other CSV format detection here in the future
+                print(f"Warning: Could not parse CSV file in any known format")
+                return None
+            
+            # Add other file format support here (Excel, JSON, etc.)
+            print(f"Warning: Unsupported file format: {file_ext}")
+            return None
 
 class SteadyStateDetector:
     """Handles steady state detection logic"""
@@ -397,6 +438,45 @@ class AnalysisEngine:
             print(f"Error in steady state analysis: {e}")
             return False
     
+    def _calculate_ramp_rate(self) -> float:
+        """Calculate ramp rate as percentage change per minute"""
+        try:
+            if (self.ramp_params.duration is None or 
+                self.ramp_params.direction is None or 
+                self.ramp_params.duration == 'N/A' or 
+                self.ramp_params.direction == 'N/A'):
+                return 'N/A'
+            
+            # Convert duration to float if it's a string (e.g., "20" from "20min")
+            duration = self.ramp_params.duration
+            if isinstance(duration, str):
+                # Remove "min" suffix if present
+                duration = duration.replace('min', '').strip()
+                try:
+                    duration = float(duration)
+                except (ValueError, TypeError):
+                    return 'N/A'
+            
+            if duration <= 0:
+                return 'N/A'
+            
+            # Calculate ramp rate based on direction
+            direction = str(self.ramp_params.direction).lower()
+            if direction in ['down', 'd']:
+                # For down ramps: -90% / ramp_time
+                ramp_rate = -90.0 / duration
+            elif direction in ['up', 'u']:
+                # For up ramps: 90% / ramp_time  
+                ramp_rate = 90.0 / duration
+            else:
+                return 'N/A'
+            
+            return ramp_rate
+            
+        except Exception as e:
+            print(f"Error calculating ramp rate: {e}")
+            return 'N/A'
+    
     def extract_key_metrics(self) -> Dict[str, Any]:
         """Extract key metrics for comparison"""
         if self.data_package is None:
@@ -424,6 +504,12 @@ class AnalysisEngine:
             'Ramp_Curve_Type': {'value': self.ramp_params.curve_shape if self.ramp_params.curve_shape else 'N/A', 'unit': '-'},
             'Ramp_Start_Time': {'value': self.ramp_params.start_time, 'unit': 'min'},
             'Ramp_End_Time': {'value': self.ramp_params.end_time if self.ramp_params.end_time else 'N/A', 'unit': 'min'},
+            
+            # Calculate ramp rate: For "down" runs: -90%/ramp_time, for "up" runs: 90%/ramp_time
+            'Ramp_Rate': {
+                'value': self._calculate_ramp_rate(), 
+                'unit': '%/min'
+            },
             
             # Temperature extremes
             'Tcat_max': {'value': np.nanmax(catalyst_temp), 'unit': '°C'},

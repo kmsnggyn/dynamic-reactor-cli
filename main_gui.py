@@ -2,7 +2,7 @@
 Dynamic Reactor Ramp Analysis Tool with GUI
 ===========================================
 
-A comprehensive analysis tool for Aspen Plus dynamic simulation data with user-friendly GUI.
+A comprehensive analysis tool for Aspen Plus Dynamics simulation data with user-friendly GUI.
 Analyzes catalyst temperature response during flow ramp experiments.
 
 Author: Seonggyun Kim (seonggyun.kim@outlook.com)
@@ -27,9 +27,16 @@ from matplotlib.patches import Patch
 
 # Import modular classes and functions
 try:
-    from results_manager import ResultsComparison
+    from results_manager import ResultsComparison, DataExporter, ConfigManager, AnalysisReporter
     from analysis_engine import AnalysisOptions, DataLoader, SteadyStateDetector, RampParameters
     from plot_generator import PlotGenerator as PlotGen
+    
+    # Create aliases for shorter names
+    DataExp = DataExporter
+    ConfigMgr = ConfigManager
+    AnalysisRep = AnalysisReporter
+    
+    print("✓ Imported modular components successfully")
 except ImportError as e:
     print(f"Warning: Could not import modular components: {e}")
     print("Please ensure analysis_engine.py, plot_generator.py, and results_manager.py are available.")
@@ -63,6 +70,24 @@ except ImportError as e:
             self.curve_type = "none"
             self.analysis_title = "Analysis"
     
+    class DataExporter:
+        @staticmethod
+        def save_data_structure(*args, **kwargs): return ""
+    
+    class ConfigManager:
+        @staticmethod
+        def get_config(*args, **kwargs): return {}
+        @staticmethod
+        def update_matplotlib_settings(*args, **kwargs): pass
+    
+    class AnalysisReporter:
+        @staticmethod
+        def print_analysis_summary(*args, **kwargs): pass
+    
+    # Create aliases
+    DataExp = DataExporter
+    ConfigMgr = ConfigManager
+    AnalysisRep = AnalysisReporter
     PlotGen = None
 from matplotlib.patches import Patch
 import tkinter as tk
@@ -830,11 +855,27 @@ class AnalysisGUI:
             date_item = self.comparison_tree.insert("", 0, values=date_values)
             time_item = self.comparison_tree.insert("", 1, values=time_values)
             
-            # Add data rows with formatted display values (5 significant figures)
-            # Exclude Source_File from display but keep it in the data for timestamp extraction
+            # Add Ramp_Rate row first as a priority metric
+            next_row = 2
+            if 'Ramp_Rate' in df.index:
+                formatted_values = ['Ramp_Rate']  # Start with metric name as first column
+                for col in df.columns:
+                    raw_value = df.loc['Ramp_Rate', col]
+                    if col == "Units":
+                        # Don't format units column
+                        formatted_values.append(str(raw_value))
+                    else:
+                        # Format values with metric-specific handling
+                        formatted_values.append(self._format_for_display(raw_value, 'Ramp_Rate'))
+                
+                self.comparison_tree.insert("", next_row, values=formatted_values)
+                next_row += 1
+            
+            # Add remaining data rows with formatted display values (5 significant figures)
+            # Exclude Source_File and Ramp_Rate (already displayed) from display but keep them in the data for timestamp extraction
             for metric in df.index:
-                if metric == 'Source_File':
-                    continue  # Skip displaying Source_File row
+                if metric in ['Source_File', 'Ramp_Rate']:
+                    continue  # Skip displaying Source_File row and Ramp_Rate (already shown)
                     
                 formatted_values = [metric]  # Start with metric name as first column
                 for col in df.columns:
@@ -1196,9 +1237,23 @@ class AnalysisGUI:
         self.comparison_tree.insert("", 0, values=date_values)
         self.comparison_tree.insert("", 1, values=time_values)
         
-        # Add data rows (excluding Source_File)
+        # Add Ramp_Rate row first as a priority metric
+        next_row = 2
+        if 'Ramp_Rate' in df.index:
+            formatted_values = ['Ramp_Rate']  # Start with metric name as first column
+            for col in df.columns:
+                raw_value = df.loc['Ramp_Rate', col]
+                if col == "Units":
+                    formatted_values.append(str(raw_value))
+                else:
+                    formatted_values.append(self._format_for_display(raw_value, 'Ramp_Rate'))
+            
+            self.comparison_tree.insert("", next_row, values=formatted_values)
+            next_row += 1
+        
+        # Add remaining data rows (excluding Source_File and Ramp_Rate)
         for metric in df.index:
-            if metric == 'Source_File':
+            if metric in ['Source_File', 'Ramp_Rate']:
                 continue
                 
             formatted_values = [metric]  # Start with metric name as first column
@@ -1711,12 +1766,15 @@ class AnalysisGUI:
                         if 'heat_transfer_matrix' in self.processed_data:
                             data_dict['variables']['Heat Transfer with coolant (kW/m2)'] = self.processed_data['heat_transfer_matrix']
                         
-                        metrics = ResultsComparison.extract_key_metrics(
-                            data_dict, 
-                            self.processed_data['ramp_params'],
-                            self.processed_data.get('steady_state_time'),
-                            self.processed_data.get('stability_metrics', {'threshold': 0.05, 'min_rms_rate': 0.0})
-                        )
+                        # Create analysis engine and extract metrics
+                        from analysis_engine import AnalysisEngine
+                        engine = AnalysisEngine()
+                        engine.data_package = data_dict
+                        engine.ramp_params = self.processed_data['ramp_params']
+                        engine.steady_state_time = self.processed_data.get('steady_state_time')
+                        engine.stability_metrics = self.processed_data.get('stability_metrics', {'threshold': 0.05, 'min_rms_rate': 0.0})
+                        
+                        metrics = engine.extract_key_metrics()
                         
                         ResultsComparison.update_comparison_file(metrics)
                         self.root.after(0, lambda: self.add_terminal_output("Results comparison updated successfully"))
@@ -1939,9 +1997,15 @@ class DynamicRampAnalyzer:
             # Update results comparison file
             print("\nUpdating results comparison file...")
             try:
-                metrics = ResultsComparison.extract_key_metrics(
-                    data_package, ramp_params, steady_state_time, stability_metrics
-                )
+                # Create analysis engine and extract metrics  
+                from analysis_engine import AnalysisEngine
+                engine = AnalysisEngine()
+                engine.data_package = data_package
+                engine.ramp_params = ramp_params
+                engine.steady_state_time = steady_state_time
+                engine.stability_metrics = stability_metrics
+                
+                metrics = engine.extract_key_metrics()
                 comparison_file = ResultsComparison.update_comparison_file(metrics)
                 print(f"Results comparison file updated: {os.path.basename(comparison_file)}")
             except Exception as e:
