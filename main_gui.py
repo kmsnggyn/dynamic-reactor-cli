@@ -165,9 +165,8 @@ class AnalysisGUI:
         container = ttk.Frame(self.root)
         container.pack(fill=tk.BOTH, expand=True)
         
-        # Main control panel (left side) - fixed width, never changes
+        # Main control panel - positioning will be handled dynamically
         self.main_frame = ttk.Frame(container, padding="10", width=480)  # Increased from 380 to match new base width
-        self.main_frame.pack(side=tk.LEFT, fill=tk.Y)
         self.main_frame.pack_propagate(False)  # Prevent frame from shrinking to content
         
         # Terminal panel (middle) - initially hidden, increased width for scrollbar
@@ -181,6 +180,9 @@ class AnalysisGUI:
         self.setup_main_panel()
         self.setup_terminal_panel()
         self.setup_comparison_panel()
+        
+        # Position main frame initially (centered when alone)
+        self._update_main_frame_position()
         
         # Ensure initial window size is correct
         self.update_window_size()
@@ -473,8 +475,6 @@ class AnalysisGUI:
         """Toggle the terminal output panel visibility"""
         if not self.terminal_panel_visible:
             # Show terminal panel
-            self.terminal_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(10, 0))
-            self.terminal_frame.pack_propagate(False)  # Maintain fixed width
             self.terminal_panel_visible = True
             self.terminal_toggle_button.config(text="Terminal Output ◀")
         else:
@@ -483,16 +483,15 @@ class AnalysisGUI:
             self.terminal_panel_visible = False
             self.terminal_toggle_button.config(text="Terminal Output ▶")
         
-        # Ensure main frame stays fixed width
+        # Ensure main frame stays fixed width and update positioning
         self.main_frame.pack_propagate(False)
+        self._update_main_frame_position()
         self.update_window_size()
     
     def toggle_comparison_panel(self):
         """Toggle the comparison table panel visibility"""
         if not self.comparison_panel_visible:
             # Show comparison panel
-            self.comparison_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(10, 0))
-            self.comparison_frame.pack_propagate(False)  # Maintain fixed width
             self.comparison_panel_visible = True
             self.comparison_toggle_button.config(text="Comparison Table ◀")
             self.refresh_comparison_table()  # Load data when showing
@@ -502,8 +501,9 @@ class AnalysisGUI:
             self.comparison_panel_visible = False
             self.comparison_toggle_button.config(text="Comparison Table ▶")
         
-        # Ensure main frame stays fixed width
+        # Ensure main frame stays fixed width and update positioning
         self.main_frame.pack_propagate(False)
+        self._update_main_frame_position()
         self.update_window_size()
     
     def update_window_size(self):
@@ -528,6 +528,30 @@ class AnalysisGUI:
             # Force the window to stay at the specified size
             self.root.minsize(new_width, 650)
             self.root.maxsize(new_width, 650)
+    
+    def _update_main_frame_position(self):
+        """Update main frame position: center when alone, left when panels are visible"""
+        any_panel_visible = self.terminal_panel_visible or self.comparison_panel_visible
+        
+        # Always pack main frame first to ensure it stays on the left
+        self.main_frame.pack_forget()
+        if any_panel_visible:
+            # Position on the left when other panels are visible
+            self.main_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(10, 0))
+        else:
+            # Center when it's the only visible panel - use expand=True for true centering
+            self.main_frame.pack(expand=True, fill=tk.Y)
+        
+        # Re-pack other panels in the correct order after main frame
+        if self.terminal_panel_visible:
+            self.terminal_frame.pack_forget()
+            self.terminal_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(10, 0))
+            self.terminal_frame.pack_propagate(False)
+        
+        if self.comparison_panel_visible:
+            self.comparison_frame.pack_forget()
+            self.comparison_frame.pack(side=tk.LEFT, fill=tk.Y, padx=(10, 0))
+            self.comparison_frame.pack_propagate(False)
     
     def add_terminal_output(self, text):
         """Add text to terminal output"""
