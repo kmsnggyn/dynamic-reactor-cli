@@ -63,9 +63,6 @@ class ResultsComparison:
         # Create new dataframe with the new column
         df_new_column = pd.DataFrame(new_data_values, index=[column_name]).T
         
-        # Create units column
-        df_units = pd.DataFrame(new_data_units, index=['Units']).T
-        
         # Combine with existing data
         if not df_existing.empty:
             # Remove existing column if it exists (overwrite mode)
@@ -76,16 +73,20 @@ class ResultsComparison:
             # Combine data
             df_combined = pd.concat([df_existing, df_new_column], axis=1, sort=False)
             
-            # Update units column
-            if 'Units' in df_combined.index:
+            # Handle Units column properly
+            if 'Units' in df_combined.columns:
+                # Update existing Units column with new units
                 for metric, unit in new_data_units.items():
                     if metric in df_combined.index:
                         df_combined.loc[metric, 'Units'] = unit
             else:
-                df_combined = pd.concat([df_combined, df_units], axis=1, sort=False)
+                # Add Units column for the first time - create it as a proper column
+                units_series = pd.Series(new_data_units, name='Units')
+                df_combined = pd.concat([df_combined, units_series], axis=1, sort=False)
         else:
-            # First entry
-            df_combined = pd.concat([df_new_column, df_units], axis=1, sort=False)
+            # First entry - create both data and units columns
+            units_series = pd.Series(new_data_units, name='Units')
+            df_combined = pd.concat([df_new_column, units_series], axis=1, sort=False)
         
         # Save to file
         try:

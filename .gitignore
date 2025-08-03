@@ -137,6 +137,12 @@ dmypy.json
 *.xlsm
 Ramp_Analysis_Results_Comparison.csv
 
+# Temporary fix scripts and test files
+fix_*.py
+complete_fix_*.py
+test_*.py
+temp_*.py
+
 # OS generated files
 .DS_Store
 .DS_Store?

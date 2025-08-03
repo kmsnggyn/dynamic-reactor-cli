@@ -89,7 +89,15 @@ class AspenDynamicsParser(BaseDataParser):
             
             # Check structure indicators
             has_time_header = df.iloc[0, 0] and str(df.iloc[0, 0]).strip().lower() == "time"
-            has_minutes_header = df.iloc[1, 0] and str(df.iloc[1, 0]).strip().lower() == "minutes"
+            
+            # Row 2 can either be "Minutes" or empty/nan (newer Aspen exports)
+            if pd.isna(df.iloc[1, 0]):
+                row2_val = ""  # Treat NaN as empty
+            else:
+                row2_val = str(df.iloc[1, 0]).strip().lower()
+            has_minutes_header = row2_val in ["minutes", ""]
+            
+            # Check if row 3 has spatial positions starting from column 2
             has_position_row = pd.to_numeric(df.iloc[2, 1:], errors='coerce').notna().any()
             
             return has_time_header and has_minutes_header and has_position_row

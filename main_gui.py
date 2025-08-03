@@ -801,15 +801,19 @@ class AnalysisGUI:
             if len(df.index) > 0:
                 display_metrics = [metric for metric in df.index if metric != 'Source_File']
                 if display_metrics:
-                    metric_width = max(
-                        len("Metric") * 8,  # Header width
-                        max([len(str(metric)) for metric in display_metrics] + [len("Exported Date"), len("Exported Time")]) * 8 + 20
-                    )
+                    # Calculate width based on longest metric name, exported date/time, and add some padding
+                    metric_names = display_metrics + ["Exported Date", "Exported Time", "Ramp_Rate"]
+                    metric_width = max([len(str(metric)) for metric in metric_names]) * 8 + 30
                 else:
-                    metric_width = len("Exported Date") * 8 + 20  # Use frozen row as minimum
+                    metric_width = len("Exported Date") * 8 + 30  # Use frozen row as minimum
             else:
-                metric_width = len("Exported Date") * 8 + 20  # Use frozen row as minimum
-            metric_width = min(metric_width, 250)  # Cap at reasonable maximum
+                metric_width = len("Exported Date") * 8 + 30  # Use frozen row as minimum
+            
+            # Apply 30% reduction as requested
+            metric_width = int(metric_width * 0.7)
+            
+            # Set reasonable bounds for metric column width  
+            metric_width = max(85, min(metric_width, 140))  # Between 85px and 140px (30% smaller)
             self.comparison_tree.column("Metric", width=metric_width, anchor=tk.W, minwidth=metric_width, stretch=False)  # Fixed width metric column
             
             # Calculate optimal width for Units column based on content (excluding Source_File)
@@ -818,13 +822,29 @@ class AnalysisGUI:
                 try:
                     display_metrics = [metric for metric in df.index if metric != 'Source_File']
                     if display_metrics:
-                        max_unit_length = max([len(str(df.loc[metric, "Units"])) for metric in display_metrics] + [len("Units"), 3])  # Include header and "-"
-                        units_width = max(units_width, max_unit_length * 8 + 15)
+                        # Get all unit values and calculate max width needed
+                        unit_values = [str(df.loc[metric, "Units"]) for metric in display_metrics if metric in df.index]
+                        unit_values.append("Units")  # Include header
+                        max_unit_length = max([len(val) for val in unit_values])
+                        units_width = max(units_width, max_unit_length * 8 + 20)
                 except:
                     units_width = 80  # Fallback if there's an error
-                units_width = min(units_width, 120)  # Cap at reasonable maximum
+                    
+                # Apply 30% reduction as requested
+                units_width = int(units_width * 0.7)
+                units_width = min(units_width, 70)  # Cap at reasonable maximum (30% smaller)
+            else:
+                # Apply 30% reduction to default as well
+                units_width = int(units_width * 0.7)  # Make default narrower too
             
-            for col in df.columns:
+            # Reorder columns to ensure Units is always second (after Metric)
+            if "Units" in df.columns:
+                data_columns = [col for col in df.columns if col != "Units"]
+                ordered_columns = ["Units"] + data_columns  # Units first among df.columns, then data columns
+            else:
+                ordered_columns = list(df.columns)
+            
+            for col in ordered_columns:
                 display_name = self._column_name_for_display(col)
                 self.comparison_tree.heading(col, text=display_name, anchor=tk.W)
                 # Make columns resizable with minimum widths
@@ -836,7 +856,7 @@ class AnalysisGUI:
             # Add frozen date and time rows first, extracting timestamp from Source_File for each column
             date_values = ["Exported Date"]  # Start with metric name
             time_values = ["Exported Time"]  # Start with metric name
-            for col in df.columns:
+            for col in ordered_columns:  # Use the same column order as headers
                 if col == "Units":
                     date_values.append("-")
                     time_values.append("-")
@@ -859,7 +879,7 @@ class AnalysisGUI:
             next_row = 2
             if 'Ramp_Rate' in df.index:
                 formatted_values = ['Ramp_Rate']  # Start with metric name as first column
-                for col in df.columns:
+                for col in ordered_columns:  # Use the same column order as headers
                     raw_value = df.loc['Ramp_Rate', col]
                     if col == "Units":
                         # Don't format units column
@@ -878,7 +898,7 @@ class AnalysisGUI:
                     continue  # Skip displaying Source_File row and Ramp_Rate (already shown)
                     
                 formatted_values = [metric]  # Start with metric name as first column
-                for col in df.columns:
+                for col in ordered_columns:  # Use the same column order as headers
                     raw_value = df.loc[metric, col]
                     if col == "Units":
                         # Don't format units column
@@ -890,7 +910,7 @@ class AnalysisGUI:
                 self.comparison_tree.insert("", tk.END, values=formatted_values)
             
             # Update column order listbox (exclude Units column from reordering)
-            self.update_column_order_listbox(df.columns)
+            self.update_column_order_listbox(ordered_columns)
             
             # Update filter options based on available data
             self.update_filter_options(df)
@@ -905,7 +925,11 @@ class AnalysisGUI:
     def update_column_order_listbox(self, columns):
         """Update the column order listbox with current data columns"""
         self.column_listbox.delete(0, tk.END)
-        data_columns = [col for col in columns if col != "Units"]
+        # Exclude Units from reordering since it's now always second
+        if isinstance(columns, list) and "Units" in columns:
+            data_columns = [col for col in columns if col != "Units"]
+        else:
+            data_columns = [col for col in columns if col != "Units"]
         for col in data_columns:
             self.column_listbox.insert(tk.END, col)
     
@@ -959,9 +983,9 @@ class AnalysisGUI:
             # Read current CSV
             df = pd.read_csv(comparison_file, index_col=0, comment='#')
             
-            # Create new column order (always keep Units at the end)
+            # Create new column order (always keep Units as the first column, followed by new data order)
             if "Units" in df.columns:
-                new_columns = new_order + ["Units"]
+                new_columns = ["Units"] + new_order  # Units first, then reordered data columns
             else:
                 new_columns = new_order
             
@@ -1196,7 +1220,10 @@ class AnalysisGUI:
             )
         else:
             metric_width = len("Exported Date") * 8 + 20
-        metric_width = min(metric_width, 250)
+            
+        # Apply 30% reduction as requested
+        metric_width = int(metric_width * 0.7)
+        metric_width = min(metric_width, 175)  # 30% smaller cap
         self.comparison_tree.column("Metric", width=metric_width, anchor=tk.W, minwidth=metric_width, stretch=False)
         
         # Calculate optimal width for Units column
@@ -1207,9 +1234,22 @@ class AnalysisGUI:
                 units_width = max(units_width, max_unit_length * 8 + 15)
             except:
                 units_width = 80
-            units_width = min(units_width, 120)
+                
+            # Apply 30% reduction as requested
+            units_width = int(units_width * 0.7)
+            units_width = min(units_width, 84)  # 30% smaller cap
+        else:
+            # Apply 30% reduction to default as well
+            units_width = int(units_width * 0.7)
         
-        for col in df.columns:
+        # Reorder columns to ensure Units is always second (after Metric)
+        if "Units" in df.columns:
+            data_columns = [col for col in df.columns if col != "Units"]
+            ordered_columns = ["Units"] + data_columns  # Units first among df.columns, then data columns
+        else:
+            ordered_columns = list(df.columns)
+        
+        for col in ordered_columns:
             display_name = self._column_name_for_display(col)
             self.comparison_tree.heading(col, text=display_name, anchor=tk.W)
             if col == "Units":
@@ -1220,7 +1260,7 @@ class AnalysisGUI:
         # Add frozen date and time rows
         date_values = ["Exported Date"]  # Start with metric name
         time_values = ["Exported Time"]  # Start with metric name
-        for col in df.columns:
+        for col in ordered_columns:  # Use the same column order as headers
             if col == "Units":
                 date_values.append("-")
                 time_values.append("-")
@@ -1241,7 +1281,7 @@ class AnalysisGUI:
         next_row = 2
         if 'Ramp_Rate' in df.index:
             formatted_values = ['Ramp_Rate']  # Start with metric name as first column
-            for col in df.columns:
+            for col in ordered_columns:  # Use the same column order as headers
                 raw_value = df.loc['Ramp_Rate', col]
                 if col == "Units":
                     formatted_values.append(str(raw_value))
@@ -1257,7 +1297,7 @@ class AnalysisGUI:
                 continue
                 
             formatted_values = [metric]  # Start with metric name as first column
-            for col in df.columns:
+            for col in ordered_columns:  # Use the same column order as headers
                 raw_value = df.loc[metric, col]
                 if col == "Units":
                     formatted_values.append(str(raw_value))
@@ -1267,7 +1307,7 @@ class AnalysisGUI:
             self.comparison_tree.insert("", tk.END, values=formatted_values)
         
         # Update column order listbox with filtered columns
-        self.update_column_order_listbox(df.columns)
+        self.update_column_order_listbox(ordered_columns)
     
     def clear_filters(self):
         """Clear all filters and show all data"""
