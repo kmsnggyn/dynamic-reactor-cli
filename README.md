@@ -23,9 +23,9 @@ The tool is built with a modular architecture for maintainability and extensibil
 │              │ • Progress tracking & display       │            │
 │              └─────────────┬───────────────────────┘            │
 │                            │ coordinates analysis               │
-│                            ▼                                    │
+│                            │                                    │
 │    ┌──────────────────┐    │    ┌─────────────────┐            │
-│    │ analysis_engine  │◀───┼───▶│ plot_generator  │            │
+│    │ analysis_engine  │<───┼───>│ plot_generator  │            │
 │    │                  │    │    │                 │            │
 │    │ • Data loading   │    │    │ • Temperature   │            │
 │    │ • Ramp detection │    │    │ • Stability     │            │
@@ -33,8 +33,8 @@ The tool is built with a modular architecture for maintainability and extensibil
 │    │ • Calculations   │    │    │ • 3D plots      │            │
 │    └─────────┬────────┘    │    └─────────────────┘            │
 │              │             │                                   │
-│              │    ┌────────▼────────┐                         │
-│              └───▶│ results_manager │                         │
+│              │    ┌────────┴────────┐                         │
+│              └───>│ results_manager │                         │
 │                   │                 │                         │
 │                   │ • CSV export    │                         │
 │                   │ • Comparison    │                         │
