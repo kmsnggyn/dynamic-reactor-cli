@@ -412,8 +412,8 @@ class AnalysisGUI:
         self.comparison_tree.bind("<Button-3>", self.show_context_menu)  # Right-click on Windows
         self.comparison_tree.bind("<Control-Button-1>", self.show_context_menu)  # Ctrl+click on Mac
         
-        # Bind double-click for sorting by metric row
-        self.comparison_tree.bind("<Double-1>", self.sort_by_metric)
+        # Bind single-click for sorting via sort indicator column
+        self.comparison_tree.bind("<Button-1>", self.on_sort_click)
         
         # Initialize sorting state
         self.current_sort_metric = None
@@ -666,6 +666,12 @@ class AnalysisGUI:
         """Return original column name without conversion"""
         return column_name
     
+    def _get_sort_indicator(self, metric_name):
+        """Get sort indicator for a metric (▲ for ascending, ▼ for descending, empty for not sorted)"""
+        if hasattr(self, 'current_sort_metric') and self.current_sort_metric == metric_name:
+            return "▲" if self.sort_ascending else "▼"
+        return ""
+    
     def _format_for_display(self, value, metric_name=None):
         """Format values for display with special handling for specific metrics"""
         try:
@@ -823,8 +829,9 @@ class AnalysisGUI:
             for item in self.comparison_tree.get_children():
                 self.comparison_tree.delete(item)
             
-            # Configure columns - use headings only to eliminate tree structure
-            columns = ['Metric'] + list(df.columns)
+            # Configure columns - use headings only to eliminate tree structure  
+            # Add sort indicator column before Metric column
+            columns = ['Sort', 'Metric'] + list(df.columns)
             self.comparison_tree['columns'] = columns  # Include all columns
             self.comparison_tree['show'] = 'headings'  # Only show headings, no tree structure
             
@@ -832,6 +839,10 @@ class AnalysisGUI:
             self.comparison_tree.configure(style="NoIndent.Treeview")
             
             # Set column headings and widths - make columns resizable
+            # Sort indicator column - very thin, clickable
+            self.comparison_tree.heading("Sort", text="⇅", anchor=tk.CENTER)
+            self.comparison_tree.column("Sort", width=25, anchor=tk.CENTER, minwidth=25, stretch=False)
+            
             self.comparison_tree.heading("Metric", text="Metric", anchor=tk.W)
             
             # Calculate optimal width for Metric column based on content (excluding Source_File)
@@ -891,8 +902,8 @@ class AnalysisGUI:
                     self.comparison_tree.column(col, width=180, anchor=tk.W, minwidth=120, stretch=True)  # Resizable data columns
             
             # Add frozen date and time rows first, extracting timestamp from Source_File for each column
-            date_values = ["Exported Date"]  # Start with metric name
-            time_values = ["Exported Time"]  # Start with metric name
+            date_values = ["", "Exported Date"]  # Start with empty sort indicator and metric name
+            time_values = ["", "Exported Time"]  # Start with empty sort indicator and metric name
             for col in ordered_columns:  # Use the same column order as headers
                 if col == "Units":
                     date_values.append("-")
@@ -915,7 +926,9 @@ class AnalysisGUI:
             # Add Ramp_Rate row first as a priority metric
             next_row = 2
             if 'Ramp_Rate' in df.index:
-                formatted_values = ['Ramp_Rate']  # Start with metric name as first column
+                # Get sort indicator for this metric
+                sort_indicator = self._get_sort_indicator('Ramp_Rate')
+                formatted_values = [sort_indicator, 'Ramp_Rate']  # Start with sort indicator and metric name
                 for col in ordered_columns:  # Use the same column order as headers
                     raw_value = df.loc['Ramp_Rate', col]
                     if col == "Units":
@@ -933,8 +946,10 @@ class AnalysisGUI:
             for metric in df.index:
                 if metric in ['Source_File', 'Ramp_Rate']:
                     continue  # Skip displaying Source_File row and Ramp_Rate (already shown)
-                    
-                formatted_values = [metric]  # Start with metric name as first column
+                
+                # Get sort indicator for this metric
+                sort_indicator = self._get_sort_indicator(metric)
+                formatted_values = [sort_indicator, metric]  # Start with sort indicator and metric name
                 for col in ordered_columns:  # Use the same column order as headers
                     raw_value = df.loc[metric, col]
                     if col == "Units":
@@ -1371,6 +1386,124 @@ class AnalysisGUI:
             # Get the metric name (first column)
             metric_name = row_values[0]
             
+            # Skip sorting for non-data rows (date/time rows)
+            if metric_name in ['Exported Date', 'Exported Time']:
+                return
+            
+            # Check if we're clicking on the same metric (toggle sort direction)
+            if self.current_sort_metric == metric_name:
+                self.sort_ascending = not self.sort_ascending
+            else:
+                self.current_sort_metric = metric_name
+                self.sort_ascending = True
+            
+            # Get the comparison file to work with actual data
+            comparison_file = os.path.join(os.getcwd(), ResultsComparison.COMPARISON_FILE)
+            if not os.path.exists(comparison_file):
+                return
+            
+            # Read the file
+            df = pd.read_csv(comparison_file, index_col=0, comment='#')
+            if df.empty or metric_name not in df.index:
+                return
+            
+            # Get the data columns (exclude Units)
+            data_columns = [col for col in df.columns if col != 'Units']
+            if len(data_columns) < 2:
+                return  # Need at least 2 columns to sort
+            
+            # Get the metric row values for sorting
+            metric_row = df.loc[metric_name, data_columns]
+            
+            # Convert to numeric for sorting, handling non-numeric values
+            numeric_values = []
+            column_mapping = []
+            
+            for col in data_columns:
+                try:
+                    # Try to convert to float
+                    val = metric_row[col]
+                    if pd.isna(val) or val in ['N/A', '', '-']:
+                        numeric_val = float('-inf') if self.sort_ascending else float('inf')
+                    else:
+                        numeric_val = float(val)
+                    numeric_values.append(numeric_val)
+                    column_mapping.append(col)
+                except (ValueError, TypeError):
+                    # Handle non-numeric values
+                    numeric_values.append(float('-inf') if self.sort_ascending else float('inf'))
+                    column_mapping.append(col)
+            
+            # Create sorting pairs and sort
+            sort_pairs = list(zip(numeric_values, column_mapping))
+            sort_pairs.sort(key=lambda x: x[0], reverse=not self.sort_ascending)
+            
+            # Extract sorted column order
+            sorted_columns = [pair[1] for pair in sort_pairs]
+            
+            # Create new column order with Units first
+            if "Units" in df.columns:
+                new_column_order = ["Units"] + sorted_columns
+            else:
+                new_column_order = sorted_columns
+            
+            # Reorder the dataframe
+            df_sorted = df[new_column_order]
+            
+            # Save the sorted dataframe
+            try:
+                df_sorted.to_csv(comparison_file)
+                
+                # Add metadata header comment back
+                with open(comparison_file, 'r') as f:
+                    content = f.read()
+                
+                header_comment = f"""# Ramp Analysis Results Comparison
+# Generated by Dynamic Reactor Ramp Analysis Tool
+# Last updated: {pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")}
+# 
+# Each column represents one ramp test configuration: Duration_Direction_CurveType
+# Each row represents a key metric from the analysis
+# Units column shows the measurement units for each metric
+# Same ramp configurations will overwrite previous results
+#
+"""
+                
+                with open(comparison_file, 'w') as f:
+                    f.write(header_comment + content)
+                
+                # Refresh the display to show sorted columns
+                if hasattr(self, 'filter_active') and self.filter_active.get():
+                    self.apply_filters()
+                else:
+                    self.refresh_comparison_table()
+                
+                # Show status message
+                sort_direction = "ascending" if self.sort_ascending else "descending"
+                self.add_terminal_output(f"📊 Sorted columns by '{metric_name}' ({sort_direction})")
+                
+            except Exception as e:
+                self.add_terminal_output(f"Error saving sorted data: {e}")
+                
+        except Exception as e:
+            self.add_terminal_output(f"Error sorting columns: {e}")
+    
+    def on_sort_click(self, event):
+        """Handle single-click on treeview to sort when clicking on Sort column"""
+        item = self.comparison_tree.identify_row(event.y)
+        column = self.comparison_tree.identify_column(event.x)
+        
+        # Only process clicks on the Sort column (column #1)
+        if column == '#1' and item:
+            # Get the metric name from the Metric column (#2)
+            metric_values = self.comparison_tree.item(item, "values")
+            if len(metric_values) >= 2:
+                metric_name = metric_values[1]  # Metric column is now index 1
+                self.sort_by_metric_name(metric_name)
+    
+    def sort_by_metric_name(self, metric_name):
+        """Sort all columns by the values in the specified metric row"""
+        try:
             # Skip sorting for non-data rows (date/time rows)
             if metric_name in ['Exported Date', 'Exported Time']:
                 return
