@@ -725,7 +725,13 @@ class AnalysisGUI:
             return str(value)
 
     def refresh_comparison_table(self):
-        """Refresh the comparison table with latest data"""
+        """Refresh the comparison table with latest data, respecting active filters"""
+        # If filters are active, delegate to apply_filters which will refresh with filters applied
+        if hasattr(self, 'filter_active') and self.filter_active.get():
+            self.apply_filters()
+            return
+        
+        # Otherwise, refresh with full data (no filters)
         comparison_file = os.path.join(os.getcwd(), ResultsComparison.COMPARISON_FILE)
         
         if not os.path.exists(comparison_file):
