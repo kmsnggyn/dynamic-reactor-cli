@@ -412,6 +412,13 @@ class AnalysisGUI:
         self.comparison_tree.bind("<Button-3>", self.show_context_menu)  # Right-click on Windows
         self.comparison_tree.bind("<Control-Button-1>", self.show_context_menu)  # Ctrl+click on Mac
         
+        # Bind double-click for sorting by metric row
+        self.comparison_tree.bind("<Double-1>", self.sort_by_metric)
+        
+        # Initialize sorting state
+        self.current_sort_metric = None
+        self.sort_ascending = True
+        
         # Scrollbars for the table
         v_scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.comparison_tree.yview)
         h_scrollbar = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.comparison_tree.xview)
@@ -467,7 +474,7 @@ class AnalysisGUI:
         
         # Instructions label
         instructions = ttk.Label(bottom_controls, 
-                                text="Right-click column header to remove • Data columns are resizable • Metric/Units columns are fixed width • Use filters to show/hide specific experiment types",
+                                text="Right-click column header to remove • Double-click metric name to sort columns • Data columns are resizable • Metric/Units columns are fixed width • Use filters to show/hide specific experiment types",
                                 font=('Arial', 8), foreground='gray')
         instructions.pack(pady=(10, 0))
     
@@ -1347,6 +1354,124 @@ class AnalysisGUI:
         self.filter_active.set(False)
         self.refresh_comparison_table()
         self.add_terminal_output("Cleared all filters - showing all data")
+    
+    def sort_by_metric(self, event):
+        """Sort columns by the metric values in the double-clicked row"""
+        try:
+            # Identify which item was clicked
+            item = self.comparison_tree.identify('item', event.x, event.y)
+            if not item:
+                return
+            
+            # Get the values of the clicked row
+            row_values = self.comparison_tree.item(item, 'values')
+            if not row_values or len(row_values) < 2:
+                return
+            
+            # Get the metric name (first column)
+            metric_name = row_values[0]
+            
+            # Skip sorting for non-data rows (date/time rows)
+            if metric_name in ['Exported Date', 'Exported Time']:
+                return
+            
+            # Check if we're clicking on the same metric (toggle sort direction)
+            if self.current_sort_metric == metric_name:
+                self.sort_ascending = not self.sort_ascending
+            else:
+                self.current_sort_metric = metric_name
+                self.sort_ascending = True
+            
+            # Get the comparison file to work with actual data
+            comparison_file = os.path.join(os.getcwd(), ResultsComparison.COMPARISON_FILE)
+            if not os.path.exists(comparison_file):
+                return
+            
+            # Read the file
+            df = pd.read_csv(comparison_file, index_col=0, comment='#')
+            if df.empty or metric_name not in df.index:
+                return
+            
+            # Get the data columns (exclude Units)
+            data_columns = [col for col in df.columns if col != 'Units']
+            if len(data_columns) < 2:
+                return  # Need at least 2 columns to sort
+            
+            # Get the metric row values for sorting
+            metric_row = df.loc[metric_name, data_columns]
+            
+            # Convert to numeric for sorting, handling non-numeric values
+            numeric_values = []
+            column_mapping = []
+            
+            for col in data_columns:
+                try:
+                    # Try to convert to float
+                    val = metric_row[col]
+                    if pd.isna(val) or val in ['N/A', '', '-']:
+                        numeric_val = float('-inf') if self.sort_ascending else float('inf')
+                    else:
+                        numeric_val = float(val)
+                    numeric_values.append(numeric_val)
+                    column_mapping.append(col)
+                except (ValueError, TypeError):
+                    # Handle non-numeric values
+                    numeric_values.append(float('-inf') if self.sort_ascending else float('inf'))
+                    column_mapping.append(col)
+            
+            # Create sorting pairs and sort
+            sort_pairs = list(zip(numeric_values, column_mapping))
+            sort_pairs.sort(key=lambda x: x[0], reverse=not self.sort_ascending)
+            
+            # Extract sorted column order
+            sorted_columns = [pair[1] for pair in sort_pairs]
+            
+            # Create new column order with Units first
+            if "Units" in df.columns:
+                new_column_order = ["Units"] + sorted_columns
+            else:
+                new_column_order = sorted_columns
+            
+            # Reorder the dataframe
+            df_sorted = df[new_column_order]
+            
+            # Save the sorted dataframe
+            try:
+                df_sorted.to_csv(comparison_file)
+                
+                # Add metadata header comment back
+                with open(comparison_file, 'r') as f:
+                    content = f.read()
+                
+                header_comment = f"""# Ramp Analysis Results Comparison
+# Generated by Dynamic Reactor Ramp Analysis Tool
+# Last updated: {pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")}
+# 
+# Each column represents one ramp test configuration: Duration_Direction_CurveType
+# Each row represents a key metric from the analysis
+# Units column shows the measurement units for each metric
+# Same ramp configurations will overwrite previous results
+#
+"""
+                
+                with open(comparison_file, 'w') as f:
+                    f.write(header_comment + content)
+                
+                # Refresh the display to show sorted columns
+                if hasattr(self, 'filter_active') and self.filter_active.get():
+                    self.apply_filters()
+                else:
+                    self.refresh_comparison_table()
+                
+                # Show status message
+                sort_direction = "ascending" if self.sort_ascending else "descending"
+                self.add_terminal_output(f"📊 Sorted columns by '{metric_name}' ({sort_direction})")
+                
+            except Exception as e:
+                self.add_terminal_output(f"Error saving sorted data: {e}")
+                
+        except Exception as e:
+            self.add_terminal_output(f"Error sorting columns: {e}")
     
     def show_context_menu(self, event):
         """Show context menu on right-click"""
