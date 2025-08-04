@@ -2113,8 +2113,8 @@ class AnalysisGUI:
                             
                             if transformed_metrics:
                                 self.root.after(0, lambda: self.add_terminal_output("Updating comparison file..."))
-                                ResultsComparison.update_comparison_file(transformed_metrics)
-                                self.root.after(0, lambda: self.add_terminal_output("Results comparison updated successfully"))
+                                # Move file update to main thread for thread safety
+                                self.root.after(0, lambda: self._update_comparison_file_and_refresh(transformed_metrics))
                             else:
                                 self.root.after(0, lambda: self.add_terminal_output("Warning: No transformed metrics, skipping comparison update"))
                         else:
@@ -2145,7 +2145,20 @@ class AnalysisGUI:
         self.progress.stop()
         self.analyze_button.config(state="normal")
         # Don't change status here as it should already be set by the success/failure handlers
-    
+
+    def _update_comparison_file_and_refresh(self, transformed_metrics):
+        """Update comparison file and refresh table in main thread"""
+        try:
+            from results_manager import ResultsComparison
+            ResultsComparison.update_comparison_file(transformed_metrics)
+            self.add_terminal_output("Results comparison updated successfully")
+            # Refresh the comparison table to show new data
+            self.refresh_comparison_table()
+        except Exception as e:
+            error_msg = f"Failed to update comparison file: {str(e)}"
+            self.add_terminal_output(error_msg)
+            print(f"Comparison file update error: {e}")
+
     def _create_and_display_plots(self):
         """Create and display plots in main thread using processed data"""
         try:

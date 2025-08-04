@@ -429,24 +429,240 @@ class AnalysisEngine:
         if hasattr(self, 'data_package') and self.data_package and 'file_path' in self.data_package:
             metrics['Source_File'] = self.data_package['file_path']
         
+        # Add timestamp for analysis
+        import pandas as pd
+        metrics['Analysis_Timestamp'] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+        
         # Add ramp parameters if available
         if self.ramp_params:
             metrics['Ramp_Duration'] = f"{self.ramp_params.duration:.1f}" if self.ramp_params.duration else "N/A"
-            metrics['Ramp_Direction'] = self.ramp_params.direction
-            metrics['Ramp_Curve_Type'] = self.ramp_params.curve_type
+            metrics['Ramp_Direction'] = self.ramp_params.direction if self.ramp_params.direction else "N/A"
+            metrics['Ramp_Curve_Type'] = self.ramp_params.curve_type if self.ramp_params.curve_type else "N/A"
+            metrics['Ramp_Start_Time'] = f"{self.ramp_params.start_time:.2f}" if self.ramp_params.start_time else "N/A"
+            metrics['Ramp_End_Time'] = f"{self.ramp_params.end_time:.2f}" if self.ramp_params.end_time else "N/A"
             
             # Calculate ramp rate if we have duration and direction
             if self.ramp_params.duration and self.ramp_params.duration > 0:
                 if self.ramp_params.end_time and self.ramp_params.start_time:
-                    metrics['Ramp_Rate'] = f"{(self.ramp_params.end_time - self.ramp_params.start_time) / self.ramp_params.duration:.3f}"
+                    temp_change = self.ramp_params.end_time - self.ramp_params.start_time
+                    metrics['Ramp_Rate'] = f"{temp_change / self.ramp_params.duration:.3f}"
                 else:
-                    metrics['Ramp_Rate'] = f"{self.ramp_params.duration:.3f}"
+                    metrics['Ramp_Rate'] = f"{1.0:.3f}"  # Default rate
             else:
                 metrics['Ramp_Rate'] = "N/A"
+        else:
+            # Default values if no ramp params
+            metrics['Ramp_Duration'] = "N/A"
+            metrics['Ramp_Direction'] = "N/A"
+            metrics['Ramp_Curve_Type'] = "N/A"
+            metrics['Ramp_Start_Time'] = "N/A"
+            metrics['Ramp_End_Time'] = "N/A"
+            metrics['Ramp_Rate'] = "N/A"
         
         # Add steady state time
         if self.steady_state_time:
             metrics['Steady_State_Time'] = f"{self.steady_state_time:.2f}"
+            metrics['Steady_State_Detected'] = "Yes"
+        else:
+            metrics['Steady_State_Time'] = "N/A"
+            metrics['Steady_State_Detected'] = "No"
+        
+        # Add stability metrics
+        if self.stability_metrics:
+            if 'threshold' in self.stability_metrics:
+                metrics['Stability_Threshold'] = f"{self.stability_metrics['threshold']:.4f}"
+                metrics['Stability_RMS_Threshold'] = f"{self.stability_metrics['threshold']:.4f}"
+            if 'min_rms_rate' in self.stability_metrics:
+                metrics['Min_RMS_Rate'] = f"{self.stability_metrics['min_rms_rate']:.6f}"
+                metrics['Stability_Min_RMS_Rate'] = f"{self.stability_metrics['min_rms_rate']:.6f}"
+        else:
+            metrics['Stability_Threshold'] = "N/A"
+            metrics['Stability_RMS_Threshold'] = "N/A"
+            metrics['Min_RMS_Rate'] = "N/A"
+            metrics['Stability_Min_RMS_Rate'] = "N/A"
+        
+        # Extract temperature metrics from package
+        if package:
+            # Try to get temperature data
+            temp_matrix = None
+            time_vector = None
+            length_vector = None
+            
+            if 'catalyst_temp_matrix' in package:
+                temp_matrix = package['catalyst_temp_matrix']
+                time_vector = package.get('time_vector')
+                length_vector = package.get('length_vector')
+            elif 'variables' in package and 'T_cat (°C)' in package['variables']:
+                temp_matrix = package['variables']['T_cat (°C)']
+                time_vector = package.get('time_vector')
+                length_vector = package.get('length_vector')
+            
+            # Ensure temp_matrix is a numpy array
+            if temp_matrix is not None and time_vector is not None:
+                # Convert to numpy array if needed
+                if hasattr(temp_matrix, 'values'):
+                    temp_matrix = temp_matrix.values
+                elif not isinstance(temp_matrix, np.ndarray):
+                    try:
+                        temp_matrix = np.array(temp_matrix)
+                    except (ValueError, TypeError):
+                        # Skip if conversion fails
+                        temp_matrix = None
+                
+                # Only proceed if we have a valid numpy array
+                if temp_matrix is not None and isinstance(temp_matrix, np.ndarray) and temp_matrix.size > 0:
+                    # Calculate basic temperature metrics
+                    max_temp = np.max(temp_matrix)
+                    min_temp = np.min(temp_matrix)
+                    avg_temp = np.mean(temp_matrix)
+                    temp_range = max_temp - min_temp
+                    
+                    # Legacy names for compatibility
+                    metrics['Tcat_max'] = f"{max_temp:.2f}"
+                    metrics['Tcat_min'] = f"{min_temp:.2f}"
+                    metrics['Tcat_avg'] = f"{avg_temp:.2f}"
+                    metrics['Tcat_range'] = f"{temp_range:.2f}"
+                    
+                    # New names as well
+                    metrics['Max_Temperature'] = f"{max_temp:.2f}"
+                    metrics['Min_Temperature'] = f"{min_temp:.2f}"
+                    metrics['Avg_Temperature'] = f"{avg_temp:.2f}"
+                    metrics['Temperature_Range'] = f"{temp_range:.2f}"
+                    
+                    # Calculate temperature derivatives if possible
+                    if len(time_vector) > 1:
+                        dt = time_vector[1] - time_vector[0]
+                        temp_derivatives = np.gradient(temp_matrix, dt, axis=0)
+                        
+                        max_positive_rate = np.max(temp_derivatives[temp_derivatives > 0]) if np.any(temp_derivatives > 0) else 0.0
+                        max_negative_rate = np.min(temp_derivatives[temp_derivatives < 0]) if np.any(temp_derivatives < 0) else 0.0
+                        max_abs_rate = np.max(np.abs(temp_derivatives))
+                        rms_rate = np.sqrt(np.mean(temp_derivatives**2))
+                        
+                        metrics['dTcat_dt_max_positive'] = f"{max_positive_rate:.4f}"
+                        metrics['dTcat_dt_max_negative'] = f"{max_negative_rate:.4f}"
+                        metrics['dTcat_dt_max_abs'] = f"{max_abs_rate:.4f}"
+                        metrics['dTcat_dt_rms'] = f"{rms_rate:.4f}"
+                    else:
+                        metrics['dTcat_dt_max_positive'] = "N/A"
+                        metrics['dTcat_dt_max_negative'] = "N/A"
+                        metrics['dTcat_dt_max_abs'] = "N/A"
+                        metrics['dTcat_dt_rms'] = "N/A"
+                    
+                    # Spatial temperature differences
+                    if temp_matrix.ndim >= 2 and temp_matrix.shape[1] > 1:
+                        spatial_diffs = np.diff(temp_matrix, axis=1)
+                        max_spatial_diff = np.max(np.abs(spatial_diffs))
+                        avg_spatial_diff = np.mean(np.abs(spatial_diffs))
+                        
+                        metrics['Tcat_spatial_diff_max'] = f"{max_spatial_diff:.4f}"
+                        metrics['Tcat_spatial_diff_avg'] = f"{avg_spatial_diff:.4f}"
+                    else:
+                        metrics['Tcat_spatial_diff_max'] = "N/A"
+                        metrics['Tcat_spatial_diff_avg'] = "N/A"
+                    
+                    # Find position of maximum temperature
+                    if temp_matrix.ndim >= 2 and length_vector is not None:
+                        max_pos = np.unravel_index(np.argmax(temp_matrix), temp_matrix.shape)
+                        if len(length_vector) > max_pos[1]:
+                            max_temp_position = length_vector[max_pos[1]]
+                            metrics['Max_Temp_Position'] = f"{max_temp_position:.3f}"
+                        else:
+                            metrics['Max_Temp_Position'] = "N/A"
+                    else:
+                        metrics['Max_Temp_Position'] = "N/A"
+                    
+                    # Calculate final temperature (last time point, reactor exit)
+                    if temp_matrix.ndim >= 2 and temp_matrix.shape[0] > 0 and temp_matrix.shape[1] > 0:
+                        final_temp = temp_matrix[-1, -1]
+                        metrics['Final_Temperature'] = f"{final_temp:.2f}"
+                    else:
+                        metrics['Final_Temperature'] = "N/A"
+                else:
+                    # No temperature data available - set defaults
+                    for metric in ['Tcat_max', 'Tcat_min', 'Tcat_avg', 'Tcat_range',
+                                 'Max_Temperature', 'Min_Temperature', 'Avg_Temperature', 'Temperature_Range',
+                                 'dTcat_dt_max_positive', 'dTcat_dt_max_negative', 'dTcat_dt_max_abs', 'dTcat_dt_rms',
+                                 'Tcat_spatial_diff_max', 'Tcat_spatial_diff_avg', 'Max_Temp_Position', 'Final_Temperature']:
+                        metrics[metric] = "N/A"
+            else:
+                # No package data available - set defaults
+                for metric in ['Tcat_max', 'Tcat_min', 'Tcat_avg', 'Tcat_range',
+                             'Max_Temperature', 'Min_Temperature', 'Avg_Temperature', 'Temperature_Range',
+                             'dTcat_dt_max_positive', 'dTcat_dt_max_negative', 'dTcat_dt_max_abs', 'dTcat_dt_rms',
+                             'Tcat_spatial_diff_max', 'Tcat_spatial_diff_avg', 'Max_Temp_Position', 'Final_Temperature']:
+                    metrics[metric] = "N/A"
+        
+        # Add data dimension information
+        if package and 'time_vector' in package and 'length_vector' in package:
+            metrics['Data_Time_Points'] = f"{len(package['time_vector'])}"
+            metrics['Data_Length_Points'] = f"{len(package['length_vector'])}"
+            
+            time_range = package['time_vector'][-1] - package['time_vector'][0] if len(package['time_vector']) > 1 else 0
+            reactor_length = package['length_vector'][-1] if len(package['length_vector']) > 0 else 0
+            
+            metrics['Time_Range'] = f"{time_range:.2f}"
+            metrics['Reactor_Length'] = f"{reactor_length:.3f}"
+        else:
+            metrics['Data_Time_Points'] = "N/A"
+            metrics['Data_Length_Points'] = "N/A"
+            metrics['Time_Range'] = "N/A"
+            metrics['Reactor_Length'] = "N/A"
+        
+        # Heat transfer metrics (placeholder - would need heat transfer data)
+        metrics['Heat_Transfer_avg'] = "N/A"
+        metrics['Heat_Transfer_max'] = "N/A"
+        metrics['Heat_Transfer_min'] = "N/A"
+        
+        # Settling time (placeholder)
+        metrics['Settling_Time'] = "N/A"
+        
+        # Add units for all metrics
+        units = {
+            'Source_File': '-',
+            'Analysis_Timestamp': '-',
+            'Ramp_Duration': 'min',
+            'Ramp_Direction': '-',
+            'Ramp_Curve_Type': '-',
+            'Ramp_Start_Time': 'min',
+            'Ramp_End_Time': 'min',
+            'Ramp_Rate': 'min⁻¹',
+            'Tcat_max': '°C',
+            'Tcat_min': '°C',
+            'Tcat_avg': '°C',
+            'Tcat_range': '°C',
+            'dTcat_dt_max_positive': '°C/min',
+            'dTcat_dt_max_negative': '°C/min',
+            'dTcat_dt_max_abs': '°C/min',
+            'dTcat_dt_rms': '°C/min',
+            'Steady_State_Detected': '-',
+            'Steady_State_Time': 'min',
+            'Settling_Time': 'min',
+            'Stability_RMS_Threshold': '°C/min',
+            'Stability_Min_RMS_Rate': '°C/min',
+            'Tcat_spatial_diff_max': '°C',
+            'Tcat_spatial_diff_avg': '°C',
+            'Data_Time_Points': 'count',
+            'Data_Length_Points': 'count',
+            'Time_Range': 'min',
+            'Reactor_Length': 'm',
+            'Heat_Transfer_avg': 'kW/m²',
+            'Heat_Transfer_max': 'kW/m²',
+            'Heat_Transfer_min': 'kW/m²',
+            'Stability_Threshold': '°C',
+            'Min_RMS_Rate': '°C/min',
+            'Max_Temperature': '°C',
+            'Min_Temperature': '°C',
+            'Avg_Temperature': '°C', 
+            'Temperature_Range': '°C',
+            'Max_Temp_Position': 'm',
+            'Final_Temperature': '°C'
+        }
+        
+        # Add units to the metrics
+        metrics['Units'] = units
+        
+        return metrics
         
         # Add stability metrics
         if self.stability_metrics:
