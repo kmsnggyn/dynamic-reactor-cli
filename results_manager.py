@@ -90,12 +90,12 @@ class ResultsComparison:
         
         # Save to file
         try:
-            df_combined.to_csv(comparison_file_path)
+            df_combined.to_csv(comparison_file_path, encoding='utf-8')
             print(f"Updated comparison file: {comparison_file_path}")
             print(f"Total columns: {len(df_combined.columns)}")
             
             # Add metadata header comment
-            with open(comparison_file_path, 'r') as f:
+            with open(comparison_file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
             header_comment = f"""# Ramp Analysis Results Comparison
@@ -109,7 +109,7 @@ class ResultsComparison:
 #
 """
             
-            with open(comparison_file_path, 'w') as f:
+            with open(comparison_file_path, 'w', encoding='utf-8') as f:
                 f.write(header_comment + content)
             
         except Exception as e:
@@ -138,8 +138,8 @@ class DataExporter:
         time_file = os.path.join(output_dir, f"{base_filename}_time_vector_{timestamp}.csv")
         length_file = os.path.join(output_dir, f"{base_filename}_length_vector_{timestamp}.csv")
         
-        pd.Series(data_package['time_vector']).to_csv(time_file, index=False, header=['Time_min'])
-        pd.Series(data_package['length_vector']).to_csv(length_file, index=False, header=['Position_m'])
+        pd.Series(data_package['time_vector']).to_csv(time_file, encoding='utf-8', index=False, header=['Time_min'])
+        pd.Series(data_package['length_vector']).to_csv(length_file, encoding='utf-8', index=False, header=['Position_m'])
         
         # Save matrices for each variable
         for var_name, matrix in data_package['variables'].items():
@@ -151,7 +151,7 @@ class DataExporter:
                 index=[f"t_{t:.3f}" for t in data_package['time_vector']],
                 columns=[f"pos_{p:.3f}" for p in data_package['length_vector']]
             )
-            df_matrix.to_csv(matrix_file)
+            df_matrix.to_csv(matrix_file, encoding='utf-8')
         
         # Save summary info
         summary_file = os.path.join(output_dir, f"{base_filename}_ramp_data_summary_{timestamp}.txt")
@@ -296,3 +296,145 @@ class AnalysisReporter:
                 print(f"   ... and {len(variables) - 5} more")
         
         print("="*60)
+
+
+class DataUtilities:
+    """Utility functions for data processing and formatting"""
+    
+    @staticmethod
+    def extract_timestamp_from_column(column_name):
+        """Extract timestamp from column name with format like '20-down-s-20250801-231457'"""
+        import re
+        try:
+            # Pattern to match YYYYMMDD-HHMMSS at the end of the column name
+            pattern = r'(\d{8})-(\d{6})(?:\.csv)?$'
+            match = re.search(pattern, column_name)
+            
+            if match:
+                date_part = match.group(1)  # YYYYMMDD
+                time_part = match.group(2)  # HHMMSS
+                
+                # Convert to readable format
+                year = date_part[:4]
+                month = date_part[4:6]
+                day = date_part[6:8]
+                
+                hour = time_part[:2]
+                minute = time_part[2:4]
+                second = time_part[4:6]
+                
+                formatted_date = f"{year}-{month}-{day}"
+                formatted_time = f"{hour}:{minute}:{second}"
+                
+                return formatted_date, formatted_time
+            else:
+                # Fallback: check if column name looks like a file path or has identifiable patterns
+                if '.csv' in column_name.lower() or '\\' in column_name or '/' in column_name:
+                    # Extract just the filename if it's a full path
+                    filename = column_name.split('\\')[-1].split('/')[-1]
+                    # Try pattern matching on the filename
+                    pattern_match = re.search(r'(\d{8})-(\d{6})', filename)
+                    if pattern_match:
+                        date_part = pattern_match.group(1)
+                        time_part = pattern_match.group(2)
+                        
+                        year = date_part[:4]
+                        month = date_part[4:6]
+                        day = date_part[6:8]
+                        hour = time_part[:2]
+                        minute = time_part[2:4]
+                        second = time_part[4:6]
+                        
+                        return f"{year}-{month}-{day}", f"{hour}:{minute}:{second}"
+                
+                # Final fallback: return column name truncated for date and N/A for time
+                return column_name[:10] if len(column_name) >= 10 else column_name, "N/A"
+                
+        except Exception:
+            # Fallback: return column name for date and N/A for time
+            return column_name[:10] if len(column_name) >= 10 else column_name, "N/A"
+    
+    @staticmethod
+    def format_for_display(value, metric_name=None):
+        """Format values for display with special handling for specific metrics"""
+        try:
+            # Handle special metric types with specific value conversions
+            if metric_name == 'Ramp_Curve_Type':
+                # Convert curve codes to display names: s -> Sinusoidal, r -> Linear
+                if value == 's':
+                    return 'Sinusoidal'
+                elif value == 'r':
+                    return 'Linear'
+                else:
+                    return str(value) if value not in ['', 'N/A', '-'] else value
+            
+            elif metric_name == 'Ramp_Direction':
+                # Convert direction codes to display names: d -> Down, u -> Up, down -> Down, up -> Up
+                if value in ['d', 'down']:
+                    return 'Down'
+                elif value in ['u', 'up']:
+                    return 'Up'
+                else:
+                    return str(value) if value not in ['', 'N/A', '-'] else value
+            
+            # Handle empty values first
+            if pd.isna(value) or value == '' or str(value).strip() == '':
+                return ''
+            
+            # Handle 'N/A' and similar string values
+            if isinstance(value, str) and value.strip().lower() in ['n/a', 'na', 'nan', 'none', '-']:
+                return value
+            
+            # Try to convert to float for numeric formatting
+            num_value = float(value)
+            
+            # Handle zero
+            if num_value == 0:
+                return '0'
+            
+            # Format to 5 significant figures
+            # Use scientific notation for very large or very small numbers
+            abs_value = abs(num_value)
+            if abs_value >= 1e6 or abs_value < 1e-3:
+                # Scientific notation with 4 decimal places (5 sig figs total)
+                formatted = f"{num_value:.4e}"
+            else:
+                # Determine number of decimal places needed for 5 sig figs
+                if abs_value >= 1:
+                    # For numbers >= 1, decimal places = 5 - number of digits before decimal
+                    digits_before_decimal = len(str(int(abs_value)))
+                    decimal_places = max(0, 5 - digits_before_decimal)
+                    formatted = f"{num_value:.{decimal_places}f}"
+                else:
+                    # For numbers < 1, use g format which handles sig figs well
+                    formatted = f"{num_value:.4g}"
+            
+            # Clean up trailing zeros for non-scientific notation
+            if 'e' not in formatted.lower():
+                formatted = formatted.rstrip('0').rstrip('.')
+            
+            return formatted
+            
+        except (ValueError, TypeError):
+            # If conversion fails, return original value as string
+            return str(value)
+    
+    @staticmethod
+    def curve_code_to_display(curve_code):
+        """Convert curve code to display name (s -> Sinusoidal, r -> Linear)"""
+        if curve_code == 's':
+            return 'Sinusoidal'
+        elif curve_code == 'r':
+            return 'Linear'
+        else:
+            return curve_code
+    
+    @staticmethod
+    def curve_display_to_code(curve_display):
+        """Convert display name to curve code (Sinusoidal -> s, Linear -> r)"""
+        if curve_display == 'Sinusoidal':
+            return 's'
+        elif curve_display == 'Linear':
+            return 'r'
+        else:
+            return curve_display

@@ -10,25 +10,9 @@ Date: August 2025
 """
 
 import os
-import sys
-import re
-import pandas as pd
 import numpy as np
-import matplotlib
-matplotlib.use('TkAgg')  # Set backend before importing pyplot
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-import seaborn as sns
-from scipy.signal import find_peaks
-from matplotlib.patches import Patch
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Tuple, Any
-import contextlib
-import io
-
-# Set style for better plots
-plt.style.use('seaborn-v0_8')
-sns.set_palette("viridis")
 
 @dataclass
 class RampParameters:
@@ -90,143 +74,34 @@ class AnalysisOptions:
 
 # Import data loading functionality from dedicated module
 try:
-    from data_loader import DataLoaderManager, load_and_parse_aspen_data, parse_ramp_parameters_from_filename
+    from importlib import import_module
+    data_loader_module = import_module('data_loader')
+    DataLoaderManager = data_loader_module.DataLoaderManager
+    StandardDataPackage = data_loader_module.StandardDataPackage
+    DataMetadata = data_loader_module.DataMetadata
+    DataFormat = data_loader_module.DataFormat
     print("Using new modular data loader")
     
-    # Create wrapper class for compatibility
+    # Simple data loading wrapper
     class DataLoader:
-        """Wrapper for new data loader functionality"""
+        """Clean wrapper for modern data loader"""
         
         @staticmethod
-        def load_and_parse_aspen_data(file_path: str) -> Optional[Dict[str, Any]]:
-            """Load Aspen data using new data loader"""
-            return load_and_parse_aspen_data(file_path)
-        
-        @staticmethod
-        def parse_ramp_parameters_from_filename(file_path: str) -> RampParameters:
-            """Parse ramp parameters using new data loader"""
-            return parse_ramp_parameters_from_filename(file_path)
-        
-        @staticmethod
-        def load_data_auto_detect(file_path: str) -> Optional[Dict[str, Any]]:
-            """Auto-detect file format using new data loader"""
+        def load_data(file_path: str) -> Optional[StandardDataPackage]:
+            """Load data using modern data loader"""
             loader = DataLoaderManager()
-            data_package = loader.load_data(file_path)
-            
-            if data_package is None:
-                return None
-            
-            # Convert to legacy format for compatibility
-            return {
-                'time_vector': data_package.time_vector,
-                'length_vector': data_package.length_vector,
-                'variables': data_package.variables,
-                'file_path': file_path,
-                'dimensions': data_package.metadata.dimensions,
-                'format_type': data_package.metadata.format_type.value
-            }
-
-except ImportError:
-    print("Warning: Could not import new data loader, using legacy implementation")
-    
-    class DataLoader:
-        """Legacy data loader implementation"""
-        
-        @staticmethod
-        def load_and_parse_aspen_data(file_path: str) -> Optional[Dict[str, Any]]:
-            """Load raw Aspen CSV file and parse into vectors and matrices structure"""
-            if not file_path:
-                return None
-            
-            print(f"Loading: {os.path.basename(file_path)}")
-            
-            try:
-                # Load raw CSV
-                df = pd.read_csv(file_path, header=None)
-                print(f"Raw data shape: {df.shape}")
-                
-                # Extract Length vector from row 2 (positions)
-                position_row = df.iloc[2]
-                length_vector = pd.to_numeric(position_row[1:], errors='coerce')
-                length_vector = length_vector[~np.isnan(length_vector)]
-                
-                print(f"Length vector: {len(length_vector)} positions from {length_vector.min():.3f} to {length_vector.max():.3f} m")
-                
-                # Find all time rows
-                time_values = []
-                time_row_indices = []
-                
-                for i in range(2, len(df), 6):
-                    if i < len(df):
-                        time_val = pd.to_numeric(df.iloc[i, 0], errors='coerce')
-                        if not np.isnan(time_val):
-                            time_values.append(time_val)
-                            time_row_indices.append(i)
-                
-                time_vector = np.array(time_values)
-                print(f"Time vector: {len(time_vector)} points from {time_vector.min():.3f} to {time_vector.max():.3f} min")
-                
-                # Expected variables
-                expected_variables = [
-                    "T_cat (°C)",
-                    "T (°C)",
-                    "Reaction Rate (kmol/m3/hr)",
-                    "Heat Transfer to Catalyst (GJ/m3/hr)",
-                    "Heat Transfer with coolant (kW/m2)"
-                ]
-                
-                # Initialize matrices
-                n_time = len(time_vector)
-                m_length = len(length_vector)
-                variables = {}
-                
-                for var_name in expected_variables:
-                    variables[var_name] = np.full((n_time, m_length), np.nan)
-                
-                # Parse the data
-                for t_idx, time_row_idx in enumerate(time_row_indices):
-                    if t_idx >= n_time:
-                        break
-                    
-                    for var_idx in range(len(expected_variables)):
-                        data_row_idx = time_row_idx + 1 + var_idx
-                        
-                        if data_row_idx < len(df):
-                            row_data = df.iloc[data_row_idx, 1:1+m_length].values
-                            row_data = pd.to_numeric(row_data, errors='coerce')
-                            variables[expected_variables[var_idx]][t_idx, :] = row_data
-                
-                # Data structure summary
-                print(f"\n=== Data Structure Created ===")
-                print(f"Time vector: shape ({len(time_vector)},)")
-                print(f"Length vector: shape ({len(length_vector)},)")
-                print(f"Variable matrices: shape ({n_time}, {m_length})")
-                
-                data_package = {
-                    'time_vector': time_vector,
-                    'length_vector': length_vector,
-                    'variables': variables,
-                    'file_path': file_path,
-                    'dimensions': {'n_time': n_time, 'm_length': m_length},
-                    'format_type': 'aspen_csv'
-                }
-                
-                return data_package
-                
-            except Exception as e:
-                print(f"Error loading data: {e}")
-                return None
+            return loader.load_data(file_path)
         
         @staticmethod
         def parse_ramp_parameters_from_filename(file_path: str) -> RampParameters:
-            """Parse ramp parameters from filename convention: {duration}-{direction}-{curve_shape}"""
+            """Parse ramp parameters from filename convention"""
             filename = os.path.basename(file_path).lower()
             filename_parts = filename.replace('.csv', '').split('-')
             
-            # Remove timestamp parts
+            # Remove timestamp parts (8+ digits)
             clean_parts = []
             for part in filename_parts:
-                if not (part.isdigit() and len(part) >= 4):
+                if not (part.isdigit() and len(part) >= 8):
                     clean_parts.append(part)
             
             ramp_params = RampParameters()
@@ -246,25 +121,39 @@ except ImportError:
                     ramp_params.direction = "down"
             
             return ramp_params
+
+except ImportError:
+    print("Warning: Could not import new data loader, using minimal fallback")
+    
+    class DataLoader:
+        """Minimal fallback implementation"""
         
         @staticmethod
-        def load_data_auto_detect(file_path: str) -> Optional[Dict[str, Any]]:
-            """Auto-detect file format and load accordingly"""
-            file_ext = os.path.splitext(file_path)[1].lower()
-            
-            if file_ext == '.csv':
-                # Try Aspen format first
-                data_package = DataLoader.load_and_parse_aspen_data(file_path)
-                if data_package is not None:
-                    return data_package
-                
-                # Add other CSV format detection here in the future
-                print(f"Warning: Could not parse CSV file in any known format")
-                return None
-            
-            # Add other file format support here (Excel, JSON, etc.)
-            print(f"Warning: Unsupported file format: {file_ext}")
+        def load_data(file_path: str) -> Optional[Dict[str, Any]]:
+            """Minimal fallback data loader"""
+            print(f"Error: Modern data loader not available. Please check data_loader module.")
             return None
+        
+        @staticmethod
+        def parse_ramp_parameters_from_filename(file_path: str) -> RampParameters:
+            """Minimal ramp parameter parsing"""
+            filename = os.path.basename(file_path).lower()
+            ramp_params = RampParameters()
+            
+            if "up" in filename:
+                ramp_params.direction = "up"
+            elif "down" in filename:
+                ramp_params.direction = "down"
+                
+            return ramp_params
+
+def _import_module_safely(module_name: str):
+    """Helper function to safely import numbered modules"""
+    try:
+        from importlib import import_module
+        return import_module(module_name)
+    except ImportError:
+        return None
 
 class SteadyStateDetector:
     """Handles steady state detection logic"""
@@ -395,231 +284,842 @@ class SteadyStateDetector:
         
         return stable_periods
 
+
 class AnalysisEngine:
-    """Main analysis engine that coordinates all analysis operations"""
+    """
+    Core analysis engine that processes raw data and creates comprehensive analysis package.
     
-    def __init__(self):
+    Architecture:
+    Raw CSV → DataLoader → AnalysisEngine → Complete Analysis Package
+                                  ↓
+                            Saved vectors, matrices, scalars, metrics
+    
+    This class:
+    1. Takes vectors and matrices from DataLoader
+    2. Computes ALL derived variables (gradients, optima, etc.)
+    3. Calculates ALL metrics (steady-state, ramp rates, etc.)
+    4. Creates comprehensive data package
+    5. Optionally saves complete analysis for reuse
+    """
+    
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        self.analysis_package = {}
+        self.save_intermediate_data = True  # Option to save analysis packages
+        # Legacy attributes for compatibility with GUI
         self.data_package = None
         self.ramp_params = None
         self.steady_state_time = None
         self.stability_metrics = None
-        self.analysis_results = {}
-    
-    def load_data(self, file_path: str) -> bool:
-        """Load and parse data from file"""
-        try:
-            self.data_package = DataLoader.load_data_auto_detect(file_path)
-            if self.data_package is None:
-                return False
-            
-            self.ramp_params = DataLoader.parse_ramp_parameters_from_filename(file_path)
-            return True
-        except Exception as e:
-            print(f"Error loading data: {e}")
-            return False
-    
-    def run_steady_state_analysis(self, threshold: float = 0.05, min_duration: float = 10) -> bool:
-        """Run steady state detection analysis"""
-        if self.data_package is None:
-            print("Error: No data loaded")
-            return False
         
-        try:
-            catalyst_temp = self.data_package['variables']['T_cat (°C)']
-            time_vector = self.data_package['time_vector']
-            
-            search_start_time = self.ramp_params.end_time if self.ramp_params.end_time else None
-            
-            self.steady_state_time, self.stability_metrics = SteadyStateDetector.detect_steady_state(
-                time_vector, catalyst_temp, threshold, min_duration, search_start_time
-            )
-            
-            return True
-        except Exception as e:
-            print(f"Error in steady state analysis: {e}")
-            return False
-    
-    def _calculate_ramp_rate(self) -> float:
-        """Calculate ramp rate as percentage change per minute"""
-        try:
-            if (self.ramp_params.duration is None or 
-                self.ramp_params.direction is None or 
-                self.ramp_params.duration == 'N/A' or 
-                self.ramp_params.direction == 'N/A'):
-                return 'N/A'
-            
-            # Convert duration to float if it's a string (e.g., "20" from "20min")
-            duration = self.ramp_params.duration
-            if isinstance(duration, str):
-                # Remove "min" suffix if present
-                duration = duration.replace('min', '').strip()
-                try:
-                    duration = float(duration)
-                except (ValueError, TypeError):
-                    return 'N/A'
-            
-            if duration <= 0:
-                return 'N/A'
-            
-            # Calculate ramp rate based on direction
-            direction = str(self.ramp_params.direction).lower()
-            if direction in ['down', 'd']:
-                # For down ramps: -90% / ramp_time
-                ramp_rate = -90.0 / duration
-            elif direction in ['up', 'u']:
-                # For up ramps: 90% / ramp_time  
-                ramp_rate = 90.0 / duration
-            else:
-                return 'N/A'
-            
-            return ramp_rate
-            
-        except Exception as e:
-            print(f"Error calculating ramp rate: {e}")
-            return 'N/A'
+        # Store configuration for analysis parameters
+        self.config = config or {
+            'steady_state': {
+                'threshold': 0.05,
+                'min_duration': 10.0
+            }
+        }
     
     def extract_key_metrics(self) -> Dict[str, Any]:
-        """Extract key metrics for comparison"""
-        if self.data_package is None:
+        """
+        Extract key metrics for results comparison table.
+        This method provides compatibility with the GUI's results comparison system.
+        """
+        if not self.analysis_package and not self.data_package:
             return {}
         
-        catalyst_temp = self.data_package['variables']['T_cat (°C)']
-        time_vector = self.data_package['time_vector']
+        # Use analysis_package if available, otherwise fall back to data_package
+        package = self.analysis_package if self.analysis_package else self.data_package
         
-        # Calculate temperature change rates
-        dt = time_vector[1] - time_vector[0] if len(time_vector) > 1 else 0.05
-        temp_derivatives = np.gradient(catalyst_temp, dt, axis=0)
+        metrics = {}
         
-        # Get heat transfer data if available
-        heat_transfer = self.data_package['variables'].get('Heat Transfer with coolant (kW/m2)')
+        # Add source file information
+        if hasattr(self, 'data_package') and self.data_package and 'file_path' in self.data_package:
+            metrics['Source_File'] = self.data_package['file_path']
         
-        # Calculate key metrics with units
-        metrics = {
-            # File and experiment info
-            'Source_File': {'value': os.path.basename(self.data_package['file_path']), 'unit': '-'},
-            'Analysis_Timestamp': {'value': pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"), 'unit': '-'},
+        # Add ramp parameters if available
+        if self.ramp_params:
+            metrics['Ramp_Duration'] = f"{self.ramp_params.duration:.1f}" if self.ramp_params.duration else "N/A"
+            metrics['Ramp_Direction'] = self.ramp_params.direction
+            metrics['Ramp_Curve_Type'] = self.ramp_params.curve_type
             
-            # Ramp parameters
-            'Ramp_Duration': {'value': self.ramp_params.duration if self.ramp_params.duration else 'N/A', 'unit': 'min'},
-            'Ramp_Direction': {'value': self.ramp_params.direction if self.ramp_params.direction else 'N/A', 'unit': '-'},
-            'Ramp_Curve_Type': {'value': self.ramp_params.curve_shape if self.ramp_params.curve_shape else 'N/A', 'unit': '-'},
-            'Ramp_Start_Time': {'value': self.ramp_params.start_time, 'unit': 'min'},
-            'Ramp_End_Time': {'value': self.ramp_params.end_time if self.ramp_params.end_time else 'N/A', 'unit': 'min'},
+            # Calculate ramp rate if we have duration and direction
+            if self.ramp_params.duration and self.ramp_params.duration > 0:
+                metrics['Ramp_Rate'] = f"{(self.ramp_params.end_time - self.ramp_params.start_time) / self.ramp_params.duration:.3f}"
+            else:
+                metrics['Ramp_Rate'] = "N/A"
+        
+        # Add steady state time
+        if self.steady_state_time:
+            metrics['Steady_State_Time'] = f"{self.steady_state_time:.2f}"
+        
+        # Add stability metrics
+        if self.stability_metrics:
+            if 'threshold' in self.stability_metrics:
+                metrics['Stability_Threshold'] = f"{self.stability_metrics['threshold']:.4f}"
+            if 'min_rms_rate' in self.stability_metrics:
+                metrics['Min_RMS_Rate'] = f"{self.stability_metrics['min_rms_rate']:.6f}"
+        
+        # Extract temperature metrics from package
+        if package:
+            # Try to get temperature data
+            temp_matrix = None
+            time_vector = None
             
-            # Calculate ramp rate: For "down" runs: -90%/ramp_time, for "up" runs: 90%/ramp_time
-            'Ramp_Rate': {
-                'value': self._calculate_ramp_rate(), 
-                'unit': '%/min'
-            },
+            if 'catalyst_temp_matrix' in package:
+                temp_matrix = package['catalyst_temp_matrix']
+                time_vector = package.get('time_vector')
+            elif 'variables' in package and 'T_cat (°C)' in package['variables']:
+                temp_matrix = package['variables']['T_cat (°C)']
+                time_vector = package.get('time_vector')
             
-            # Temperature extremes
-            'Tcat_max': {'value': np.nanmax(catalyst_temp), 'unit': '°C'},
-            'Tcat_min': {'value': np.nanmin(catalyst_temp), 'unit': '°C'},
-            'Tcat_avg': {'value': np.nanmean(catalyst_temp), 'unit': '°C'},
-            'Tcat_range': {'value': np.nanmax(catalyst_temp) - np.nanmin(catalyst_temp), 'unit': '°C'},
-            'dTcat_dt_max_positive': {'value': np.nanmax(temp_derivatives), 'unit': '°C/min'},
-            'dTcat_dt_max_negative': {'value': np.nanmin(temp_derivatives), 'unit': '°C/min'},
-            'dTcat_dt_max_abs': {'value': np.nanmax(np.abs(temp_derivatives)), 'unit': '°C/min'},
-            'dTcat_dt_rms': {'value': np.sqrt(np.nanmean(temp_derivatives**2)), 'unit': '°C/min'},
-            'Steady_State_Detected': {'value': 'Yes' if self.steady_state_time is not None else 'No', 'unit': '-'},
-            'Steady_State_Time': {'value': self.steady_state_time if self.steady_state_time is not None else 'N/A', 'unit': 'min'},
-            'Settling_Time': {'value': (self.steady_state_time - self.ramp_params.end_time) if (self.steady_state_time is not None and self.ramp_params.end_time) else 'N/A', 'unit': 'min'},
-            'Stability_RMS_Threshold': {'value': self.stability_metrics['threshold'] if self.stability_metrics else 'N/A', 'unit': '°C/min'},
-            'Stability_Min_RMS_Rate': {'value': self.stability_metrics['min_rms_rate'] if self.stability_metrics else 'N/A', 'unit': '°C/min'},
-            'Tcat_spatial_diff_max': {'value': np.nanmax(np.nanmax(catalyst_temp, axis=1) - np.nanmin(catalyst_temp, axis=1)), 'unit': '°C'},
-            'Tcat_spatial_diff_avg': {'value': np.nanmean(np.nanmax(catalyst_temp, axis=1) - np.nanmin(catalyst_temp, axis=1)), 'unit': '°C'},
-            'Data_Time_Points': {'value': self.data_package['dimensions']['n_time'], 'unit': 'count'},
-            'Data_Length_Points': {'value': self.data_package['dimensions']['m_length'], 'unit': 'count'},
-            'Time_Range': {'value': f"{time_vector.min():.1f}-{time_vector.max():.1f}", 'unit': 'min'},
-            'Reactor_Length': {'value': self.data_package['length_vector'].max() - self.data_package['length_vector'].min(), 'unit': 'm'},
+            if temp_matrix is not None and time_vector is not None:
+                # Calculate basic temperature metrics
+                max_temp = np.max(temp_matrix)
+                min_temp = np.min(temp_matrix)
+                avg_temp = np.mean(temp_matrix)
+                temp_range = max_temp - min_temp
+                
+                metrics['Max_Temperature'] = f"{max_temp:.2f}"
+                metrics['Min_Temperature'] = f"{min_temp:.2f}"
+                metrics['Avg_Temperature'] = f"{avg_temp:.2f}"
+                metrics['Temperature_Range'] = f"{temp_range:.2f}"
+                
+                # Find position of maximum temperature
+                max_pos = np.unravel_index(np.argmax(temp_matrix), temp_matrix.shape)
+                if len(package.get('length_vector', [])) > max_pos[1]:
+                    max_temp_position = package['length_vector'][max_pos[1]]
+                    metrics['Max_Temp_Position'] = f"{max_temp_position:.3f}"
+                
+                # Calculate final temperature (last time point, reactor exit)
+                final_temp = temp_matrix[-1, -1]
+                metrics['Final_Temperature'] = f"{final_temp:.2f}"
+        
+        # Add units for metrics
+        units = {
+            'Source_File': '-',
+            'Ramp_Duration': 'min',
+            'Ramp_Direction': '-',
+            'Ramp_Curve_Type': '-',
+            'Ramp_Rate': 'min⁻¹',
+            'Steady_State_Time': 'min',
+            'Stability_Threshold': '°C',
+            'Min_RMS_Rate': '°C/min',
+            'Max_Temperature': '°C',
+            'Min_Temperature': '°C',
+            'Avg_Temperature': '°C', 
+            'Temperature_Range': '°C',
+            'Max_Temp_Position': 'm',
+            'Final_Temperature': '°C'
         }
         
-        # Add heat transfer metrics if available
-        if heat_transfer is not None:
-            metrics.update({
-                'Heat_Transfer_avg': {'value': np.nanmean(heat_transfer), 'unit': 'kW/m²'},
-                'Heat_Transfer_max': {'value': np.nanmax(heat_transfer), 'unit': 'kW/m²'},
-                'Heat_Transfer_min': {'value': np.nanmin(heat_transfer), 'unit': 'kW/m²'}
-            })
-        else:
-            metrics.update({
-                'Heat_Transfer_avg': {'value': 'N/A', 'unit': 'kW/m²'},
-                'Heat_Transfer_max': {'value': 'N/A', 'unit': 'kW/m²'},
-                'Heat_Transfer_min': {'value': 'N/A', 'unit': 'kW/m²'}
-            })
+        # Add units to the metrics
+        metrics['Units'] = units
         
         return metrics
-    
-    def run_full_analysis(self, options: AnalysisOptions) -> Dict[str, Any]:
-        """Run complete analysis based on options"""
-        if self.data_package is None:
-            return {}
         
-        results = {}
+    def run_complete_analysis(self, file_path: str, time_limit: Optional[float] = None, 
+                            save_package: bool = True) -> Dict[str, Any]:
+        """
+        Run complete analysis pipeline and return comprehensive analysis package.
         
-        # Always run steady state analysis
-        self.run_steady_state_analysis()
+        Returns:
+            Complete analysis package with:
+            - Original vectors/matrices from DataLoader
+            - Derived variables (gradients, rate changes, etc.)
+            - Scalar metrics (steady state time, max temps, etc.)
+            - Analysis metadata
+        """
+        print("\n" + "="*80)
+        print("COMPREHENSIVE ANALYSIS ENGINE")
+        print("="*80)
         
-        # Extract key metrics
-        results['metrics'] = self.extract_key_metrics()
+        # Step 1: Load raw data using modern data loader
+        print("Step 1: Loading raw data...")
+        data_package = DataLoader.load_data(file_path)
+        if data_package is None:
+            raise ValueError("Failed to load data from file")
         
-        # Store analysis components for plot generation
-        results['data_package'] = self.data_package
-        results['ramp_params'] = self.ramp_params
-        results['steady_state_time'] = self.steady_state_time
-        results['stability_metrics'] = self.stability_metrics
-        results['options'] = options
-        
-        return results
-    
-    def print_analysis_summary(self):
-        """Print comprehensive analysis summary"""
-        if self.data_package is None:
-            print("No data loaded for analysis")
-            return
-        
-        print("\n" + "="*60)
-        print("ANALYSIS SUMMARY")
-        print("="*60)
-        
-        # File information
-        print(f"Source file: {os.path.basename(self.data_package['file_path'])}")
-        print(f"Data dimensions: {self.data_package['dimensions']['n_time']} time points × {self.data_package['dimensions']['m_length']} positions")
-        print(f"Time range: {self.data_package['time_vector'].min():.1f} - {self.data_package['time_vector'].max():.1f} min")
-        print(f"Reactor length: {self.data_package['length_vector'].min():.3f} - {self.data_package['length_vector'].max():.3f} m")
-        
-        # Ramp parameters
-        print(f"\nRamp Configuration:")
-        if self.ramp_params.duration:
-            print(f"  Duration: {self.ramp_params.duration} minutes")
-            print(f"  Direction: {self.ramp_params.direction.upper()}")
-            print(f"  Curve type: {self.ramp_params.curve_type}")
-            print(f"  Period: t = {self.ramp_params.start_time:.1f} - {self.ramp_params.end_time:.1f} min")
+        # Extract ramp parameters from metadata (preferred) or filename (fallback)
+        if data_package.metadata.ramp_parameters:
+            ramp_params = RampParameters(
+                duration=data_package.metadata.ramp_parameters.get('duration'),
+                direction=data_package.metadata.ramp_parameters.get('direction'),
+                curve_shape=data_package.metadata.ramp_parameters.get('curve_shape'),
+                start_time=data_package.metadata.ramp_parameters.get('start_time', 10.0)
+            )
+            print(f"✓ Ramp parameters from metadata: {ramp_params.duration}min {ramp_params.direction}-{ramp_params.curve_shape}")
         else:
-            print(f"  Type: {self.ramp_params.analysis_title}")
-            print(f"  Auto-detected from filename")
+            ramp_params = DataLoader.parse_ramp_parameters_from_filename(file_path)
+            print("⚠ Using fallback ramp parameter parsing")
         
-        # Steady state analysis
-        print(f"\nSteady State Analysis:")
-        if self.steady_state_time is not None:
-            print(f"  Status: ✓ Detected")
-            print(f"  Time: t = {self.steady_state_time:.1f} min")
-            if self.ramp_params.end_time:
-                settling_time = self.steady_state_time - self.ramp_params.end_time
-                print(f"  Settling time: {settling_time:.1f} min")
-            print(f"  RMS stability: {self.stability_metrics['min_rms_rate']:.4f} °C min⁻¹")
+        print(f"✓ Raw data loaded: {data_package.n_time} time points, {data_package.n_spatial} positions")
+        
+        # Convert StandardDataPackage to legacy format for compatibility with existing analysis methods
+        raw_data = {
+            'time_vector': data_package.time_vector,
+            'length_vector': data_package.length_vector,
+            'variables': data_package.variables,
+            'file_path': file_path,
+            'dimensions': data_package.metadata.dimensions,
+            'format_type': data_package.metadata.format_type.value if hasattr(data_package.metadata.format_type, 'value') else str(data_package.metadata.format_type)
+        }
+        
+        # Step 2: Process core variables
+        print("\nStep 2: Processing core variables...")
+        analysis_package = self._process_core_variables(raw_data, ramp_params, time_limit)
+        
+        # Step 3: Compute derived variables
+        print("\nStep 3: Computing derived variables...")
+        self._compute_derived_variables(analysis_package)
+        
+        # Step 4: Calculate scalar metrics
+        print("\nStep 4: Calculating scalar metrics...")
+        self._calculate_scalar_metrics(analysis_package)
+        
+        # Step 5: Detect key features (optima, transitions, etc.)
+        print("\nStep 5: Detecting key features...")
+        self._detect_key_features(analysis_package)
+        
+        # Step 6: Generate analysis metadata
+        print("\nStep 6: Generating analysis metadata...")
+        self._generate_metadata(analysis_package, file_path)
+        
+        # Step 7: Optionally save complete package
+        if save_package:
+            print("\nStep 7: Saving analysis package...")
+            self._save_analysis_package(analysis_package, file_path)
+        
+        print("\n✓ Complete analysis finished!")
+        print(f"Analysis package contains {len(analysis_package)} main categories")
+        
+        self.analysis_package = analysis_package
+        return analysis_package
+    
+    def load_analysis_package(self, package_dir: str) -> Dict[str, Any]:
+        """
+        Load a previously saved analysis package from directory.
+        
+        Args:
+            package_dir: Directory containing the saved analysis package files
+            
+        Returns:
+            Complete analysis package dictionary
+        """
+        if not os.path.exists(package_dir):
+            raise FileNotFoundError(f"Analysis package directory not found: {package_dir}")
+        
+        print(f"Loading analysis package from: {package_dir}")
+        
+        # Load vectors and matrices
+        vectors_file = os.path.join(package_dir, "vectors.npz")
+        matrices_file = os.path.join(package_dir, "matrices.npz") 
+        derived_file = os.path.join(package_dir, "derived_variables.npz")
+        
+        # Load JSON files
+        metrics_file = os.path.join(package_dir, "scalar_metrics.json")
+        features_file = os.path.join(package_dir, "key_features.json")
+        metadata_file = os.path.join(package_dir, "metadata.json")
+        
+        # Initialize package with consistent structure
+        package = {
+            'core_vectors': {},
+            'core_matrices': {},
+            'derived_variables': {},
+            'scalar_metrics': {},
+            'key_features': {},
+            'metadata': {}
+        }
+        
+        # Load numpy data
+        if os.path.exists(vectors_file):
+            vectors_data = np.load(vectors_file)
+            package['core_vectors'] = {key: vectors_data[key] for key in vectors_data.files}
+            
+        if os.path.exists(matrices_file):
+            matrices_data = np.load(matrices_file)
+            package['core_matrices'] = {key: matrices_data[key] for key in matrices_data.files}
+            
+        if os.path.exists(derived_file):
+            derived_data = np.load(derived_file)
+            package['derived_variables'] = {key: derived_data[key] for key in derived_data.files}
+        
+        # Load JSON data
+        import json
+        
+        if os.path.exists(metrics_file):
+            with open(metrics_file, 'r') as f:
+                package['scalar_metrics'] = json.load(f)
+                
+        if os.path.exists(features_file):
+            with open(features_file, 'r') as f:
+                package['key_features'] = json.load(f)
+                
+        if os.path.exists(metadata_file):
+            with open(metadata_file, 'r') as f:
+                package['metadata'] = json.load(f)
+        
+        print(f"✓ Analysis package loaded successfully")
+        print(f"  - Core vectors: {len(package['core_vectors'])} items")
+        print(f"  - Core matrices: {len(package['core_matrices'])} items") 
+        print(f"  - Derived variables: {len(package['derived_variables'])} items")
+        print(f"  - Scalar metrics: {len(package['scalar_metrics'])} items")
+        print(f"  - Key features: {len(package['key_features'])} items")
+        
+        # Store in instance
+        self.analysis_package = package
+        return package
+    
+    def _process_core_variables(self, raw_data: Dict[str, Any], ramp_params: RampParameters, 
+                              time_limit: Optional[float]) -> Dict[str, Any]:
+        """Process and filter core variables from raw data"""
+        
+        # Extract core vectors
+        time_vector = raw_data['time_vector']
+        length_vector = raw_data['length_vector']
+        
+        # Convert to numpy arrays if they're pandas objects
+        if hasattr(time_vector, 'values'):
+            time_vector = time_vector.values
+        if hasattr(length_vector, 'values'):
+            length_vector = length_vector.values
+        
+        # Apply time limit if specified
+        if time_limit is not None:
+            time_mask = time_vector <= time_limit
+            time_vector = time_vector[time_mask]
         else:
-            print(f"  Status: ✗ Not detected")
-            if self.stability_metrics:
-                print(f"  Minimum RMS observed: {self.stability_metrics['min_rms_rate']:.4f} °C min⁻¹")
-                print(f"  Current threshold: {self.stability_metrics['threshold']:.3f} °C min⁻¹")
+            time_mask = np.ones(len(time_vector), dtype=bool)
+        
+        # Extract and filter matrices
+        variables = raw_data['variables']
+        processed_matrices = {}
+        
+        for var_name, matrix in variables.items():
+            processed_matrices[var_name] = matrix[time_mask, :] if time_limit else matrix
+            print(f"  • {var_name}: {processed_matrices[var_name].shape}")
+        
+        # Create analysis package structure
+        package = {
+            'core_vectors': {
+                'time_vector': time_vector,
+                'length_vector': length_vector
+            },
+            'core_matrices': processed_matrices,
+            'ramp_parameters': ramp_params,
+            'derived_variables': {},
+            'scalar_metrics': {},
+            'key_features': {},
+            'metadata': {}
+        }
+        
+        print(f"  • Core processing complete: {len(time_vector)} time points")
+        return package
+    
+    def _compute_derived_variables(self, package: Dict[str, Any]):
+        """Compute all derived variables (gradients, rates, differences, etc.)"""
+        
+        time_vector = package['core_vectors']['time_vector']
+        length_vector = package['core_vectors']['length_vector']
+        core_matrices = package['core_matrices']
+        
+        derived = package['derived_variables']
+        
+        # Temperature gradients
+        if 'T_cat (°C)' in core_matrices:
+            catalyst_temp = core_matrices['T_cat (°C)']
+            
+            # Convert vectors to numpy arrays if they're pandas Series
+            time_array = time_vector.values if hasattr(time_vector, 'values') else time_vector
+            length_array = length_vector.values if hasattr(length_vector, 'values') else length_vector
+            
+            # Spatial gradients (∂T/∂x)
+            dt = time_array[1] - time_array[0] if len(time_array) > 1 else 0.05
+            dx = length_array[1] - length_array[0] if len(length_array) > 1 else 0.1
+            
+            spatial_gradients = np.gradient(catalyst_temp, dx, axis=1)
+            temporal_gradients = np.gradient(catalyst_temp, dt, axis=0)
+            
+            derived['spatial_temperature_gradient'] = spatial_gradients
+            derived['temporal_temperature_gradient'] = temporal_gradients
+            print(f"  • Temperature gradients: spatial ({spatial_gradients.shape}), temporal ({temporal_gradients.shape})")
+            
+            # Temperature differences (if bulk temp available)
+            if 'T (°C)' in core_matrices:
+                bulk_temp = core_matrices['T (°C)']
+                temp_difference = catalyst_temp - bulk_temp
+                derived['temperature_difference'] = temp_difference
+                print(f"  • Temperature difference (Tcat - T): {temp_difference.shape}")
+                
+                # Heat transfer indication
+        
+        # Reaction rate analysis
+        if 'Reaction Rate (kmol/m3/hr)' in core_matrices:
+            reaction_rate = core_matrices['Reaction Rate (kmol/m3/hr)']
+            
+            # Rate gradients
+            rate_spatial_grad = np.gradient(reaction_rate, dx, axis=1)
+            rate_temporal_grad = np.gradient(reaction_rate, dt, axis=0)
+            
+            derived['reaction_rate_spatial_gradient'] = rate_spatial_grad
+            derived['reaction_rate_temporal_gradient'] = rate_temporal_grad
+            print(f"  • Reaction rate gradients: computed")
+    
+    def _calculate_scalar_metrics(self, package: Dict[str, Any]):
+        """Calculate all scalar metrics and key numbers"""
+        
+        time_vector = package['core_vectors']['time_vector']
+        length_vector = package['core_vectors']['length_vector']
+        core_matrices = package['core_matrices']
+        ramp_params = package['ramp_parameters']
+        
+        metrics = package['scalar_metrics']
+        
+        # Steady state detection
+        if 'T_cat (°C)' in core_matrices:
+            catalyst_temp = core_matrices['T_cat (°C)']
+            
+            search_start_time = ramp_params.end_time if ramp_params.end_time else None
+            steady_state_config = self.config['steady_state']
+            steady_state_time, stability_metrics = SteadyStateDetector.detect_steady_state(
+                time_vector, catalyst_temp,
+                threshold=steady_state_config['threshold'],
+                min_duration=steady_state_config['min_duration'],
+                search_start_time=search_start_time
+            )
+            
+            metrics['steady_state_time'] = steady_state_time
+            metrics['stability_metrics'] = stability_metrics
+            print(f"  • Steady state time: {steady_state_time:.1f} min" if steady_state_time else "  • Steady state: not detected")
         
         # Temperature statistics
-        catalyst_temp = self.data_package['variables']['T_cat (°C)']
-        print(f"\nTemperature Statistics:")
-        print(f"  Range: {np.nanmin(catalyst_temp):.1f} - {np.nanmax(catalyst_temp):.1f} °C")
-        print(f"  Average: {np.nanmean(catalyst_temp):.1f} °C")
+        if 'T_cat (°C)' in core_matrices:
+            catalyst_temp = core_matrices['T_cat (°C)']
+            
+            metrics['temperature_stats'] = {
+                'min_temp': np.nanmin(catalyst_temp),
+                'max_temp': np.nanmax(catalyst_temp),
+                'mean_temp': np.nanmean(catalyst_temp),
+                'temp_range': np.nanmax(catalyst_temp) - np.nanmin(catalyst_temp),
+                'final_temp': catalyst_temp[-1, :].mean() if len(catalyst_temp) > 0 else np.nan
+            }
+            print(f"  • Temperature range: {metrics['temperature_stats']['min_temp']:.1f} - {metrics['temperature_stats']['max_temp']:.1f} °C")
         
-        # System performance
-        max_temp_change = np.nanmax(np.abs(np.diff(catalyst_temp, axis=0)))
-        print(f"  Max temperature change rate: {max_temp_change:.3f} °C/time_step")
+        # Ramp analysis
+        if ramp_params.duration and ramp_params.start_time and ramp_params.end_time:
+            ramp_mask = (time_vector >= ramp_params.start_time) & (time_vector <= ramp_params.end_time)
+            
+            if 'T_cat (°C)' in core_matrices and np.any(ramp_mask):
+                catalyst_temp = core_matrices['T_cat (°C)']
+                ramp_temps = catalyst_temp[ramp_mask, :]
+                
+                initial_temp = ramp_temps[0, :].mean()
+                final_temp = ramp_temps[-1, :].mean()
+                temp_change = final_temp - initial_temp
+                
+                # Calculate ramp rate
+                ramp_rate = temp_change / ramp_params.duration
+                
+                metrics['ramp_analysis'] = {
+                    'initial_temp': initial_temp,
+                    'final_temp': final_temp,
+                    'temperature_change': temp_change,
+                    'ramp_rate': ramp_rate,
+                    'duration': ramp_params.duration,
+                    'direction': ramp_params.direction
+                }
+                print(f"  • Ramp rate: {ramp_rate:.3f} °C/min ({ramp_params.direction})")
+        
+        # Process all matrices for min/max locations
+        for var_name, matrix in core_matrices.items():
+            if np.isfinite(matrix).any():
+                min_val = np.nanmin(matrix)
+                max_val = np.nanmax(matrix)
+                min_idx = np.unravel_index(np.nanargmin(matrix), matrix.shape)
+                max_idx = np.unravel_index(np.nanargmax(matrix), matrix.shape)
+                
+                metrics[f'{var_name}_extrema'] = {
+                    'min_value': min_val,
+                    'max_value': max_val,
+                    'min_location': {
+                        'time': time_vector[min_idx[0]],
+                        'position': length_vector[min_idx[1]]
+                    },
+                    'max_location': {
+                        'time': time_vector[max_idx[0]], 
+                        'position': length_vector[max_idx[1]]
+                    }
+                }
+    
+    def _detect_key_features(self, package: Dict[str, Any]):
+        """Detect key features like optima, transitions, hot spots, etc."""
+        
+        time_vector = package['core_vectors']['time_vector']
+        length_vector = package['core_vectors']['length_vector']
+        core_matrices = package['core_matrices']
+        
+        features = package['key_features']
+        
+        # Hot spot detection
+        if 'T_cat (°C)' in core_matrices:
+            catalyst_temp = core_matrices['T_cat (°C)']
+            
+            # Find maximum temperature at each time point
+            max_temp_positions = np.nanargmax(catalyst_temp, axis=1)
+            max_temps = np.nanmax(catalyst_temp, axis=1)
+            
+            features['hot_spot_evolution'] = {
+                'positions': length_vector[max_temp_positions],
+                'temperatures': max_temps,
+                'times': time_vector
+            }
+            
+            # Hot spot stability
+            position_std = np.std(length_vector[max_temp_positions])
+            features['hot_spot_stability'] = {
+                'position_std': position_std,
+                'is_stable': position_std < 0.1  # Within 10cm
+            }
+            print(f"  • Hot spot tracking: position std = {position_std:.3f} m")
+        
+        # Reaction rate optima
+        if 'Reaction Rate (kmol/m3/hr)' in core_matrices:
+            reaction_rate = core_matrices['Reaction Rate (kmol/m3/hr)']
+            
+            # Find peak reaction rates
+            max_rate_positions = np.nanargmax(reaction_rate, axis=1)
+            max_rates = np.nanmax(reaction_rate, axis=1)
+            
+            features['reaction_rate_optima'] = {
+                'positions': length_vector[max_rate_positions],
+                'rates': max_rates,
+                'times': time_vector
+            }
+            print(f"  • Reaction rate optima: tracked")
+        
+        # Phase transitions (rapid changes)
+        if 'temporal_temperature_gradient' in package['derived_variables']:
+            temp_grad = package['derived_variables']['temporal_temperature_gradient']
+            
+            # Find rapid changes (above threshold)
+            rapid_change_threshold = np.nanstd(temp_grad) * 3
+            rapid_changes = np.abs(temp_grad) > rapid_change_threshold
+            
+            # Get time points and positions of rapid changes
+            rapid_indices = np.where(rapid_changes)
+            if len(rapid_indices[0]) > 0:
+                rapid_times = time_vector[rapid_indices[0]]
+                rapid_positions = length_vector[rapid_indices[1]]
+                
+                features['rapid_transitions'] = {
+                    'times': rapid_times,
+                    'positions': rapid_positions,
+                    'threshold': rapid_change_threshold,
+                    'count': len(rapid_times)
+                }
+                print(f"  • Rapid transitions: {len(rapid_times)} detected")
+    
+    def _generate_metadata(self, package: Dict[str, Any], file_path: str):
+        """Generate comprehensive metadata for the analysis"""
+        
+        import datetime
+        
+        metadata = package['metadata']
+        
+        # File information
+        metadata['source_file'] = {
+            'path': file_path,
+            'filename': os.path.basename(file_path),
+            'timestamp': datetime.datetime.now().isoformat()
+        }
+        
+        # Data dimensions
+        time_vector = package['core_vectors']['time_vector']
+        length_vector = package['core_vectors']['length_vector']
+        
+        metadata['dimensions'] = {
+            'time_points': len(time_vector),
+            'spatial_points': len(length_vector),
+            'time_range': (float(time_vector[0]), float(time_vector[-1])),
+            'length_range': (float(length_vector[0]), float(length_vector[-1]))
+        }
+        
+        # Variable summary
+        metadata['variables'] = {
+            'core_variables': list(package['core_matrices'].keys()),
+            'derived_variables': list(package['derived_variables'].keys()),
+            'scalar_metrics': list(package['scalar_metrics'].keys()),
+            'key_features': list(package['key_features'].keys())
+        }
+        
+        # Analysis summary
+        ramp_params = package['ramp_parameters']
+        metadata['analysis_summary'] = {
+            'ramp_detected': bool(ramp_params.duration),
+            'ramp_type': f"{ramp_params.duration}min_{ramp_params.direction}_{ramp_params.curve_shape}" if ramp_params.duration else "none",
+            'steady_state_detected': package['scalar_metrics'].get('steady_state_time') is not None,
+            'total_variables_computed': len(package['core_matrices']) + len(package['derived_variables'])
+        }
+        
+        print(f"  • Analysis metadata: complete")
+        print(f"    - Variables: {metadata['analysis_summary']['total_variables_computed']} total")
+        print(f"    - Ramp type: {metadata['analysis_summary']['ramp_type']}")
+    
+    def _save_analysis_package(self, package: Dict[str, Any], file_path: str):
+        """Save complete analysis package to disk for reuse"""
+        
+        if not self.save_intermediate_data:
+            return
+        
+        # Create analysis output directory
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        output_dir = os.path.join(os.path.dirname(file_path), f"{base_name}_analysis")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Save vectors
+        vectors_file = os.path.join(output_dir, "vectors.npz")
+        np.savez(vectors_file, **package['core_vectors'])
+        
+        # Save matrices 
+        matrices_file = os.path.join(output_dir, "matrices.npz")
+        np.savez(matrices_file, **package['core_matrices'])
+        
+        # Save derived variables
+        if package['derived_variables']:
+            derived_file = os.path.join(output_dir, "derived_variables.npz")
+            np.savez(derived_file, **package['derived_variables'])
+        
+        # Save scalar metrics as JSON
+        import json
+        
+        def convert_numpy(obj):
+            if isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
+                return float(obj)
+            elif isinstance(obj, (np.bool_, bool)):
+                return bool(obj)
+            elif isinstance(obj, dict):
+                return {key: convert_numpy(value) for key, value in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_numpy(item) for item in obj]
+            elif obj is None:
+                return None
+            elif isinstance(obj, str):
+                return str(obj)
+            return obj
+        
+        metrics_file = os.path.join(output_dir, "scalar_metrics.json")
+        with open(metrics_file, 'w') as f:
+            json.dump(convert_numpy(package['scalar_metrics']), f, indent=2)
+        
+        features_file = os.path.join(output_dir, "key_features.json") 
+        with open(features_file, 'w') as f:
+            json.dump(convert_numpy(package['key_features']), f, indent=2)
+        
+        metadata_file = os.path.join(output_dir, "metadata.json")
+        with open(metadata_file, 'w') as f:
+            json.dump(convert_numpy(package['metadata']), f, indent=2)
+        
+        # Create summary report
+        summary_file = os.path.join(output_dir, "analysis_summary.txt")
+        with open(summary_file, 'w') as f:
+            f.write("DYNAMIC REACTOR ANALYSIS SUMMARY\n")
+            f.write("="*50 + "\n\n")
+            
+            metadata = package['metadata']
+            f.write(f"Source File: {metadata['source_file']['filename']}\n")
+            f.write(f"Analysis Time: {metadata['source_file']['timestamp']}\n")
+            f.write(f"Data Dimensions: {metadata['dimensions']['time_points']} x {metadata['dimensions']['spatial_points']}\n")
+            f.write(f"Time Range: {metadata['dimensions']['time_range'][0]:.1f} - {metadata['dimensions']['time_range'][1]:.1f} min\n")
+            f.write(f"Length Range: {metadata['dimensions']['length_range'][0]:.3f} - {metadata['dimensions']['length_range'][1]:.3f} m\n\n")
+            
+            f.write("Variables Computed:\n")
+            for var in metadata['variables']['core_variables']:
+                f.write(f"  • {var}\n")
+            
+            f.write(f"\nDerived Variables: {len(metadata['variables']['derived_variables'])}\n")
+            f.write(f"Scalar Metrics: {len(metadata['variables']['scalar_metrics'])}\n")
+            f.write(f"Key Features: {len(metadata['variables']['key_features'])}\n")
+        
+        print(f"  • Analysis package saved: {output_dir}")
+        print(f"    - Files: vectors.npz, matrices.npz, derived_variables.npz")
+        print(f"    - Metrics: scalar_metrics.json, key_features.json, metadata.json")
+        print(f"    - Summary: analysis_summary.txt")
+
+
+class DynamicRampAnalyzer:
+    """Main analyzer class that coordinates all analysis components"""
+    
+    def __init__(self):
+        # Update matplotlib settings if ConfigManager is available
+        results_manager_module = _import_module_safely('results_manager')
+        if results_manager_module:
+            try:
+                ConfigManager = results_manager_module.ConfigManager
+                ConfigManager.update_matplotlib_settings()
+                self.config = ConfigManager.get_config()
+            except AttributeError:
+                self.config = self._get_default_config()
+        else:
+            self.config = self._get_default_config()
+    
+    def _get_default_config(self) -> Dict[str, Any]:
+        """Get default configuration when ConfigManager is not available"""
+        return {
+            'steady_state': {
+                'threshold': 0.05,
+                'min_duration': 5.0
+            }
+        }
+    
+    def run_data_processing_only(self, file_path: str, options) -> bool:
+        """Run data processing only (no plotting) for threading"""
+        try:
+            print("="*60)
+            print("DYNAMIC REACTOR RAMP ANALYSIS")
+            print("="*60)
+            
+            # Use AnalysisEngine for all data processing to avoid duplication
+            print("Initializing analysis engine...")
+            engine = AnalysisEngine(config=self.config)
+            
+            # Run complete analysis - this does everything once and correctly
+            analysis_package = engine.run_complete_analysis(
+                file_path=file_path, 
+                time_limit=getattr(options, 'time_limit', None),
+                save_package=True
+            )
+            
+            # Extract key information from analysis package for backward compatibility
+            ramp_params = analysis_package['ramp_parameters']
+            time_vector = analysis_package['core_vectors']['time_vector']
+            length_vector = analysis_package['core_vectors']['length_vector']
+            catalyst_temp_matrix = analysis_package['core_matrices']['T_cat (°C)']
+            bulk_temp_matrix = analysis_package['core_matrices'].get('T (°C)')
+            
+            # Extract computed metrics
+            steady_state_time = analysis_package['scalar_metrics'].get('steady_state_time')
+            stability_metrics = analysis_package['scalar_metrics'].get('stability_metrics')
+            
+            # Print results summary
+            if steady_state_time:
+                print(f"✓ Steady state detected at t = {steady_state_time:.1f} min")
+            else:
+                print("⚠ No steady state detected in analysis period")
+            
+            # Generate analysis report
+            results_manager_module = _import_module_safely('results_manager')
+            if results_manager_module:
+                try:
+                    AnalysisReporter = results_manager_module.AnalysisReporter
+                    
+                    # Create legacy data package for reporter compatibility
+                    legacy_data_package = {
+                        'time_vector': time_vector,
+                        'length_vector': length_vector,
+                        'variables': analysis_package['core_matrices'],
+                        'file_path': file_path,
+                        'dimensions': analysis_package['metadata']['dimensions'],
+                        'format_type': 'StandardDataPackage'
+                    }
+                    
+                    AnalysisReporter.print_analysis_summary(
+                        legacy_data_package, ramp_params, steady_state_time, stability_metrics
+                    )
+                except AttributeError:
+                    print("Analysis reporter not available")
+            else:
+                print("Results manager module not available")
+            
+            # Update results comparison file
+            print("\nUpdating results comparison file...")
+            results_manager_module = _import_module_safely('results_manager')
+            if results_manager_module:
+                try:
+                    # Set up engine for metrics extraction
+                    engine.data_package = {
+                        'time_vector': time_vector,
+                        'length_vector': length_vector,
+                        'variables': analysis_package['core_matrices'],
+                        'file_path': file_path
+                    }
+                    engine.ramp_params = ramp_params
+                    engine.steady_state_time = steady_state_time
+                    engine.stability_metrics = stability_metrics
+                    
+                    metrics = engine.extract_key_metrics()
+                    
+                    ResultsComparison = results_manager_module.ResultsComparison
+                    comparison_file = ResultsComparison.update_comparison_file(metrics)
+                    print(f"Results comparison file updated: {os.path.basename(comparison_file)}")
+                except Exception as e:
+                    print(f"Warning: Could not update results comparison file: {e}")
+            else:
+                print("Warning: Results manager not available for comparison file update")
+            
+            # Store processed data for main thread plotting
+            self.processed_data = {
+                'time_vector': time_vector,
+                'catalyst_temp_matrix': catalyst_temp_matrix,
+                'bulk_temp_matrix': bulk_temp_matrix,
+                'length_vector': length_vector,
+                'ramp_params': ramp_params,
+                'steady_state_time': steady_state_time,
+                'stability_metrics': stability_metrics,
+                'analysis_package': analysis_package  # Store complete analysis for advanced users
+            }
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Data processing failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def run_analysis(self, file_path: str, options) -> bool:
+        """Run complete analysis with plotting (for non-GUI usage)"""
+        success = self.run_data_processing_only(file_path, options)
+        if not success:
+            return False
+        
+        # Generate plots if data processing was successful
+        plot_generator_module = _import_module_safely('plot_generator')
+        if plot_generator_module:
+            try:
+                PlotGen = plot_generator_module.PlotGenerator
+                data = self.processed_data
+                
+                if options.temperature_response:
+                    fig = PlotGen.create_temperature_response_plots(
+                        data['time_vector'], data['catalyst_temp_matrix'], data['length_vector'],
+                        data['ramp_params'], data['steady_state_time'], file_path, 
+                        getattr(options, 'time_limit', None)
+                    )
+                    if fig:
+                        import matplotlib.pyplot as plt
+                        plt.show()
+                
+                # Add other plot types as needed...
+                
+            except Exception as e:
+                print(f"Error generating plots: {e}")
+                return False
+        else:
+            print("Warning: Plot generator module not available")
+        
+        return True
+    
+    def save_analysis_results(self, data_package: Dict[str, Any], output_dir: Optional[str] = None) -> str:
+        """Save analysis results to files and return timestamp"""
+        try:
+            from importlib import import_module
+            results_manager_module = import_module('results_manager')
+            DataExporter = results_manager_module.DataExporter
+            timestamp = DataExporter.save_data_structure(data_package, output_dir)
+            return timestamp
+        except ImportError:
+            print("Warning: DataExporter not available - results not saved")
+            return "unknown"

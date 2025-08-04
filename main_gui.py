@@ -1,3 +1,4 @@
+
 """
 Dynamic Reactor Ramp Analysis Tool with GUI
 ===========================================
@@ -9,103 +10,35 @@ Author: Seonggyun Kim (seonggyun.kim@outlook.com)
 Date: August 2025
 """
 
+# Standard library imports
+import contextlib
+import io
 import os
-import sys
-import re
 import shutil
+import sys
+import threading
+from typing import Optional, Dict, List, Tuple, Any
+
+# Third-party imports
+import pandas as pd
+import matplotlib.pyplot as plt
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-from typing import Optional, Dict, List, Tuple, Any
-import pandas as pd
-import numpy as np
-import matplotlib
-matplotlib.use('TkAgg')  # Set backend before importing pyplot
-import matplotlib.pyplot as plt
-import seaborn as sns
-from mpl_toolkits.mplot3d import Axes3D
-from matplotlib.patches import Patch
 
-# Import modular classes and functions
+# Local module imports
 try:
-    from results_manager import ResultsComparison, DataExporter, ConfigManager, AnalysisReporter
-    from analysis_engine import AnalysisOptions, DataLoader, SteadyStateDetector, RampParameters
+    from results_manager import ResultsComparison, DataUtilities
+    from analysis_engine import AnalysisEngine, AnalysisOptions, DynamicRampAnalyzer
     from plot_generator import PlotGenerator as PlotGen
-    
-    # Create aliases for shorter names
-    DataExp = DataExporter
-    ConfigMgr = ConfigManager
-    AnalysisRep = AnalysisReporter
+    from data_loader import DataLoaderManager
     
     print("✓ Imported modular components successfully")
 except ImportError as e:
-    print(f"Warning: Could not import modular components: {e}")
+    print(f"Error: Could not import modular components: {e}")
     print("Please ensure analysis_engine.py, plot_generator.py, and results_manager.py are available.")
-    # Create placeholder classes to prevent crashes
-    class ResultsComparison:
-        COMPARISON_FILE = "Ramp_Analysis_Results_Comparison.csv"
-        @staticmethod
-        def extract_key_metrics(*args, **kwargs): return {}
-        @staticmethod
-        def update_comparison_file(*args, **kwargs): return ""
-    
-    class AnalysisOptions:
-        def __init__(self, **kwargs): pass
-    
-    class DataLoader:
-        @staticmethod
-        def load_and_parse_aspen_data(*args, **kwargs): return {}
-        @staticmethod
-        def parse_ramp_parameters_from_filename(*args, **kwargs): return None
-    
-    class SteadyStateDetector:
-        @staticmethod
-        def detect_steady_state(*args, **kwargs): return None, {}
-    
-    class RampParameters:
-        def __init__(self, **kwargs):
-            self.duration = None
-            self.start_time = 0
-            self.end_time = 0
-            self.direction = "none"
-            self.curve_type = "none"
-            self.analysis_title = "Analysis"
-    
-    class DataExporter:
-        @staticmethod
-        def save_data_structure(*args, **kwargs): return ""
-    
-    class ConfigManager:
-        @staticmethod
-        def get_config(*args, **kwargs): return {}
-        @staticmethod
-        def update_matplotlib_settings(*args, **kwargs): pass
-    
-    class AnalysisReporter:
-        @staticmethod
-        def print_analysis_summary(*args, **kwargs): pass
-    
-    # Create aliases
-    DataExp = DataExporter
-    ConfigMgr = ConfigManager
-    AnalysisRep = AnalysisReporter
-    PlotGen = None
-from matplotlib.patches import Patch
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
-import threading
-from typing import Optional, Dict, List, Tuple, Any
-import contextlib
-import io
-import shutil
-import seaborn as sns
+    print("The application cannot run without these modules.")
+    sys.exit(1)
 
-# Configure matplotlib settings
-try:
-    plt.style.use('seaborn-v0_8')
-    sns.set_palette('viridis')
-except:
-    # Fallback if seaborn style is not available
-    plt.style.use('default')
 
 # GUI classes start here
 
@@ -115,13 +48,13 @@ class AnalysisGUI:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Dynamic Reactor Ramp Analysis Tool")
-        self.root.geometry("500x650")  # Set to match base_width
         
         # Expansion state variables
         self.base_width = 500  # Increased from 400 to make collapsed window wider
         self.expanded_width = 940  # Increased from 900 to account for wider terminal (500 + 420 + 20 padding)
         self.total_expanded_width = 1740  # Increased from 1700 to account for wider terminal
         self.current_width = self.base_width
+        self.current_height = 650  # Default height, will be adjusted
         self.terminal_panel_visible = False
         self.comparison_panel_visible = False
         
@@ -133,14 +66,8 @@ class AnalysisGUI:
         self.time_limit_var = tk.StringVar(value="")
         self.save_results_var = tk.BooleanVar(value=False)
         
-        # Plot selection variables
-        self.plot_vars = {
-            'temperature_response': tk.BooleanVar(value=True),
-            'stability_analysis': tk.BooleanVar(value=True),
-            'spatial_gradients': tk.BooleanVar(value=True),
-            'heat_transfer_3d': tk.BooleanVar(value=True),
-            'temperature_difference': tk.BooleanVar(value=True)
-        }
+        # Plot selection variables (will be dynamically populated from plot_factory.PLOT_REGISTRY)
+        self.plot_vars = {}
         
         # Store data for saving
         self.last_data_package = None
@@ -156,6 +83,8 @@ class AnalysisGUI:
         self.filter_direction = tk.StringVar(value="All") 
         self.filter_curve = tk.StringVar(value="All")
         self.filter_active = tk.BooleanVar(value=False)
+        
+        self.data_loader = DataLoaderManager()
         
         self.setup_gui()
     
@@ -187,6 +116,9 @@ class AnalysisGUI:
         
         # Ensure initial window size is correct
         self.update_window_size()
+        
+        # Schedule a final height adjustment after all widgets are rendered
+        self.root.after(100, self._finalize_window_size)
     
     def setup_main_panel(self):
         """Setup the main control panel"""
@@ -232,30 +164,27 @@ class AnalysisGUI:
         # Plot selection section
         plots_frame = ttk.LabelFrame(self.main_frame, text="Select Plots to Generate", padding="10")
         plots_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        
+
         # Select all/none buttons
         button_frame = ttk.Frame(plots_frame)
         button_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        
+
         ttk.Button(button_frame, text="Select All", 
                   command=self.select_all_plots).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="Select None", 
                   command=self.select_no_plots).pack(side=tk.LEFT)
-        
-        # Plot checkboxes
-        plot_descriptions = {
-            'temperature_response': 'Temperature Response Analysis',
-            'stability_analysis': 'Stability Analysis',
-            'spatial_gradients': 'Spatial Temperature Gradients',
-            'heat_transfer_3d': '3D Heat Transfer Analysis',
-            'temperature_difference': 'Temperature Difference (Tcat - T)'
-        }
-        
+
+        # Dynamically generate plot checkboxes from plot_factory.PLOT_REGISTRY
+        from plot_factory import PLOT_REGISTRY
+        self.plot_vars = {}
         row = 1
-        for key, description in plot_descriptions.items():
-            ttk.Checkbutton(plots_frame, text=description, 
-                           variable=self.plot_vars[key]).grid(row=row, column=0, 
-                                                            sticky=tk.W, pady=2)
+        for plot_id, plot_info in PLOT_REGISTRY.items():
+            self.plot_vars[plot_id] = tk.BooleanVar(value=True)
+            ttk.Checkbutton(
+                plots_frame,
+                text=plot_info['label'],
+                variable=self.plot_vars[plot_id]
+            ).grid(row=row, column=0, sticky=tk.W, pady=2)
             row += 1
         
         # Control buttons
@@ -515,6 +444,28 @@ class AnalysisGUI:
         self._update_main_frame_position()
         self.update_window_size()
     
+    def calculate_optimal_height(self):
+        """Calculate the optimal window height to fit all content"""
+        # Force layout calculation
+        self.root.update_idletasks()
+        
+        # Get the required height of the main frame
+        main_frame_height = self.main_frame.winfo_reqheight()
+        
+        # Add padding and window decorations
+        main_frame_padding = 20  # 10px padding on top and bottom
+        window_decorations = 40  # Title bar and borders
+        
+        optimal_height = main_frame_height + main_frame_padding + window_decorations
+        
+        # Ensure minimum height and reasonable maximum
+        min_height = 600
+        max_height = 900  # Don't make it too tall for smaller screens
+        
+        optimal_height = max(min_height, min(optimal_height, max_height))
+        
+        return optimal_height
+    
     def update_window_size(self):
         """Update window size based on visible panels"""
         # Calculate the required width based on visible panels
@@ -527,16 +478,31 @@ class AnalysisGUI:
         else:
             new_width = self.base_width  # 500px main panel only
         
-        # Only update if the width actually changed
-        if new_width != self.current_width:
+        # Calculate optimal height to fit content
+        optimal_height = self.calculate_optimal_height()
+        
+        # Only update if the dimensions actually changed
+        if new_width != self.current_width or optimal_height != self.current_height:
             self.current_width = new_width
-            # Set the window geometry with fixed height
-            self.root.geometry(f"{new_width}x650")
+            self.current_height = optimal_height
+            
+            # Set the window geometry with optimal height
+            self.root.geometry(f"{new_width}x{optimal_height}")
             # Ensure the window doesn't auto-resize based on content
             self.root.update_idletasks()
             # Force the window to stay at the specified size
-            self.root.minsize(new_width, 650)
-            self.root.maxsize(new_width, 650)
+            self.root.minsize(new_width, optimal_height)
+            self.root.maxsize(new_width, optimal_height)
+    
+    def _finalize_window_size(self):
+        """Final adjustment of window size after all widgets are rendered"""
+        # Force a final layout calculation and window size update
+        self.root.update_idletasks()
+        self.update_window_size()
+        
+        # Add some debug output to see the calculated height
+        print(f"Final window size: {self.current_width}x{self.current_height}")
+        print(f"Main frame required height: {self.main_frame.winfo_reqheight()}")
     
     def _update_main_frame_position(self):
         """Update main frame position: center when alone, left when panels are visible"""
@@ -595,75 +561,6 @@ class AnalysisGUI:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to save log: {str(e)}")
     
-    def _extract_timestamp_from_column(self, column_name):
-        """Extract timestamp from column name with format like '20-down-s-20250801-231457'"""
-        try:
-            # Pattern to match YYYYMMDD-HHMMSS at the end of the column name
-            pattern = r'(\d{8})-(\d{6})(?:\.csv)?$'
-            match = re.search(pattern, column_name)
-            
-            if match:
-                date_part = match.group(1)  # YYYYMMDD
-                time_part = match.group(2)  # HHMMSS
-                
-                # Convert to readable format
-                year = date_part[:4]
-                month = date_part[4:6]
-                day = date_part[6:8]
-                
-                hour = time_part[:2]
-                minute = time_part[2:4]
-                second = time_part[4:6]
-                
-                formatted_date = f"{year}-{month}-{day}"
-                formatted_time = f"{hour}:{minute}:{second}"
-                
-                return formatted_date, formatted_time
-            else:
-                # Fallback: check if column name looks like a file path or has identifiable patterns
-                if '.csv' in column_name.lower() or '\\' in column_name or '/' in column_name:
-                    # Extract just the filename if it's a full path
-                    filename = column_name.split('\\')[-1].split('/')[-1]
-                    # Try pattern matching on the filename
-                    pattern_match = re.search(r'(\d{8})-(\d{6})', filename)
-                    if pattern_match:
-                        date_part = pattern_match.group(1)
-                        time_part = pattern_match.group(2)
-                        
-                        year = date_part[:4]
-                        month = date_part[4:6]
-                        day = date_part[6:8]
-                        hour = time_part[:2]
-                        minute = time_part[2:4]
-                        second = time_part[4:6]
-                        
-                        return f"{year}-{month}-{day}", f"{hour}:{minute}:{second}"
-                
-                # Final fallback: return column name truncated for date and N/A for time
-                return column_name[:10] if len(column_name) >= 10 else column_name, "N/A"
-                
-        except Exception:
-            # Fallback: return column name for date and N/A for time
-            return column_name[:10] if len(column_name) >= 10 else column_name, "N/A"
-    
-    def _curve_code_to_display(self, curve_code):
-        """Convert curve code to display name (s -> Sinusoidal, r -> Linear)"""
-        if curve_code == 's':
-            return 'Sinusoidal'
-        elif curve_code == 'r':
-            return 'Linear'
-        else:
-            return curve_code
-    
-    def _curve_display_to_code(self, curve_display):
-        """Convert display name to curve code (Sinusoidal -> s, Linear -> r)"""
-        if curve_display == 'Sinusoidal':
-            return 's'
-        elif curve_display == 'Linear':
-            return 'r'
-        else:
-            return curve_display
-    
     def _column_name_for_display(self, column_name):
         """Return original column name without conversion"""
         return column_name
@@ -674,71 +571,6 @@ class AnalysisGUI:
             return "▲" if self.sort_ascending else "▼"
         return ""
     
-    def _format_for_display(self, value, metric_name=None):
-        """Format values for display with special handling for specific metrics"""
-        try:
-            # Handle special metric types with specific value conversions
-            if metric_name == 'Ramp_Curve_Type':
-                # Convert curve codes to display names: s -> Sinusoidal, r -> Linear
-                if value == 's':
-                    return 'Sinusoidal'
-                elif value == 'r':
-                    return 'Linear'
-                else:
-                    return str(value) if value not in ['', 'N/A', '-'] else value
-            
-            elif metric_name == 'Ramp_Direction':
-                # Convert direction codes to display names: d -> Down, u -> Up, down -> Down, up -> Up
-                if value in ['d', 'down']:
-                    return 'Down'
-                elif value in ['u', 'up']:
-                    return 'Up'
-                else:
-                    return str(value) if value not in ['', 'N/A', '-'] else value
-            
-            # Handle empty values first
-            if pd.isna(value) or value == '' or str(value).strip() == '':
-                return ''
-            
-            # Handle 'N/A' and similar string values
-            if isinstance(value, str) and value.strip().lower() in ['n/a', 'na', 'nan', 'none', '-']:
-                return value
-            
-            # Try to convert to float for numeric formatting
-            num_value = float(value)
-            
-            # Handle zero
-            if num_value == 0:
-                return '0'
-            
-            # Format to 5 significant figures
-            # Use scientific notation for very large or very small numbers
-            abs_value = abs(num_value)
-            if abs_value >= 1e6 or abs_value < 1e-3:
-                # Scientific notation with 4 decimal places (5 sig figs total)
-                formatted = f"{num_value:.4e}"
-            else:
-                # Determine number of decimal places needed for 5 sig figs
-                import math
-                if abs_value >= 1:
-                    # For numbers >= 1, decimal places = 5 - number of digits before decimal
-                    digits_before_decimal = len(str(int(abs_value)))
-                    decimal_places = max(0, 5 - digits_before_decimal)
-                    formatted = f"{num_value:.{decimal_places}f}"
-                else:
-                    # For numbers < 1, use g format which handles sig figs well
-                    formatted = f"{num_value:.4g}"
-            
-            # Clean up trailing zeros for non-scientific notation
-            if 'e' not in formatted.lower():
-                formatted = formatted.rstrip('0').rstrip('.')
-            
-            return formatted
-            
-        except (ValueError, TypeError):
-            # If conversion fails, return original value as string
-            return str(value)
-
     def refresh_comparison_table(self):
         """Refresh the comparison table with latest data, respecting active filters"""
         # If filters are active, delegate to apply_filters which will refresh with filters applied
@@ -758,74 +590,20 @@ class AnalysisGUI:
         
         try:
             # Read the comparison file, skipping comment lines
-            df = pd.read_csv(comparison_file, index_col=0, comment='#')
+            df = pd.read_csv(comparison_file, index_col=0, comment='#', encoding='utf-8')
             
-            # Clean up empty rows (metrics with no data)
-            rows_before = len(df.index)
+            # Basic validation and data type fixes
+            if df.empty:
+                for item in self.comparison_tree.get_children():
+                    self.comparison_tree.delete(item)
+                self.comparison_tree.heading("#0", text="No comparison data available")
+                return
+                
+            # Convert any non-string index values to strings
+            df.index = df.index.astype(str)
             
-            # Find rows where all data columns (excluding Units) are empty, NaN, or 'N/A'
-            data_columns = [col for col in df.columns if col != 'Units']
-            if data_columns:
-                # Check for rows that are completely empty across all data columns
-                # Handle various empty representations: NaN, 'N/A', empty string, whitespace
-                empty_mask = df[data_columns].isna().all(axis=1) | \
-                           (df[data_columns] == 'N/A').all(axis=1) | \
-                           (df[data_columns] == '').all(axis=1)
-                
-                # Check for whitespace-only strings for each column separately
-                for col in data_columns:
-                    empty_mask = empty_mask | (df[col].astype(str).str.strip() == '')
-                
-                # Get list of rows that will be removed for logging
-                empty_rows = df.index[empty_mask].tolist()
-                
-                # Remove empty rows
-                df_cleaned = df[~empty_mask]
-                
-                rows_after = len(df_cleaned.index)
-                removed_rows = rows_before - rows_after
-                
-                if removed_rows > 0:
-                    try:
-                        # Save the cleaned data back to file
-                        df_cleaned.to_csv(comparison_file)
-                        
-                        # Add metadata header comment back
-                        with open(comparison_file, 'r') as f:
-                            content = f.read()
-                        
-                        header_comment = f"""# Ramp Analysis Results Comparison
-# Generated by Dynamic Reactor Ramp Analysis Tool
-# Last updated: {pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")}
-# 
-# Each column represents one ramp test configuration: Duration_Direction_CurveType
-# Each row represents a key metric from the analysis
-# Units column shows the measurement units for each metric
-# Same ramp configurations will overwrite previous results
-#
-"""
-                        
-                        with open(comparison_file, 'w') as f:
-                            f.write(header_comment + content)
-                        
-                        # Update df to use the cleaned version
-                        df = df_cleaned
-                        
-                        # Log the cleanup action with details
-                        self.add_terminal_output(f"🧹 Cleaned up {removed_rows} empty metric row(s) from comparison table")
-                        if len(empty_rows) <= 5:  # Show names if not too many
-                            for row_name in empty_rows:
-                                self.add_terminal_output(f"   • Removed: {row_name}")
-                        else:
-                            self.add_terminal_output(f"   • Removed {len(empty_rows)} metrics (too many to list)")
-                        
-                    except Exception as cleanup_error:
-                        self.add_terminal_output(f"Warning: Could not save cleaned data: {cleanup_error}")
-                        # Continue with original data if cleanup fails
-                
-            else:
-                # No data columns, use original dataframe
-                pass
+            # Convert any problematic column names to strings
+            df.columns = [str(col) if not isinstance(col, str) else col for col in df.columns]
             
             # Clear existing data
             for item in self.comparison_tree.get_children():
@@ -849,11 +627,14 @@ class AnalysisGUI:
             
             # Calculate optimal width for Metric column based on content (excluding Source_File)
             if len(df.index) > 0:
-                display_metrics = [metric for metric in df.index if metric != 'Source_File']
+                display_metrics = [str(metric) for metric in df.index if str(metric) != 'Source_File']
                 if display_metrics:
                     # Calculate width based on longest metric name, exported date/time, and add some padding
                     metric_names = display_metrics + ["Exported Date", "Exported Time", "Ramp_Rate"]
-                    metric_width = max([len(str(metric)) for metric in metric_names]) * 8 + 30
+                    try:
+                        metric_width = max([len(str(metric)) for metric in metric_names]) * 8 + 30
+                    except (TypeError, ValueError):
+                        metric_width = len("Exported Date") * 8 + 30  # Fallback
                 else:
                     metric_width = len("Exported Date") * 8 + 30  # Use frozen row as minimum
             else:
@@ -870,14 +651,21 @@ class AnalysisGUI:
             units_width = 60  # Default minimum
             if "Units" in df.columns and len(df.index) > 0:
                 try:
-                    display_metrics = [metric for metric in df.index if metric != 'Source_File']
+                    display_metrics = [str(metric) for metric in df.index if str(metric) != 'Source_File']
                     if display_metrics:
                         # Get all unit values and calculate max width needed
-                        unit_values = [str(df.loc[metric, "Units"]) for metric in display_metrics if metric in df.index]
+                        unit_values = []
+                        for metric in display_metrics:
+                            if metric in df.index:
+                                try:
+                                    unit_val = str(df.loc[metric, "Units"])
+                                    unit_values.append(unit_val)
+                                except (KeyError, IndexError, TypeError):
+                                    unit_values.append("N/A")
                         unit_values.append("Units")  # Include header
-                        max_unit_length = max([len(val) for val in unit_values])
+                        max_unit_length = max([len(str(val)) for val in unit_values])
                         units_width = max(units_width, max_unit_length * 8 + 20)
-                except:
+                except (TypeError, ValueError, KeyError):
                     units_width = 80  # Fallback if there's an error
                     
                 # Apply 30% reduction as requested
@@ -914,10 +702,10 @@ class AnalysisGUI:
                     # Extract timestamp from the Source_File value for this column
                     if 'Source_File' in df.index:
                         source_file = df.loc['Source_File', col]
-                        extracted_date, extracted_time = self._extract_timestamp_from_column(source_file)
+                        extracted_date, extracted_time = DataUtilities.extract_timestamp_from_column(source_file)
                     else:
                         # Fallback to column name if Source_File not available
-                        extracted_date, extracted_time = self._extract_timestamp_from_column(col)
+                        extracted_date, extracted_time = DataUtilities.extract_timestamp_from_column(col)
                     date_values.append(extracted_date)
                     time_values.append(extracted_time)
             
@@ -938,7 +726,7 @@ class AnalysisGUI:
                         formatted_values.append(str(raw_value))
                     else:
                         # Format values with metric-specific handling
-                        formatted_values.append(self._format_for_display(raw_value, 'Ramp_Rate'))
+                        formatted_values.append(DataUtilities.format_for_display(raw_value, 'Ramp_Rate'))
                 
                 self.comparison_tree.insert("", next_row, values=formatted_values)
                 next_row += 1
@@ -946,6 +734,8 @@ class AnalysisGUI:
             # Add remaining data rows with formatted display values (5 significant figures)
             # Exclude Source_File and Ramp_Rate (already displayed) from display but keep them in the data for timestamp extraction
             for metric in df.index:
+                # Ensure metric is a string
+                metric = str(metric)
                 if metric in ['Source_File', 'Ramp_Rate']:
                     continue  # Skip displaying Source_File row and Ramp_Rate (already shown)
                 
@@ -959,7 +749,7 @@ class AnalysisGUI:
                         formatted_values.append(str(raw_value))
                     else:
                         # Format values with metric-specific handling
-                        formatted_values.append(self._format_for_display(raw_value, metric))
+                        formatted_values.append(DataUtilities.format_for_display(raw_value, metric))
                 
                 self.comparison_tree.insert("", tk.END, values=formatted_values)
             
@@ -1035,7 +825,7 @@ class AnalysisGUI:
                 return
             
             # Read current CSV
-            df = pd.read_csv(comparison_file, index_col=0, comment='#')
+            df = pd.read_csv(comparison_file, index_col=0, comment='#', encoding='utf-8')
             
             # Create new column order (always keep Units as the first column, followed by new data order)
             if "Units" in df.columns:
@@ -1050,7 +840,7 @@ class AnalysisGUI:
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    df_reordered.to_csv(comparison_file)
+                    df_reordered.to_csv(comparison_file, encoding='utf-8')
                     break
                 except PermissionError:
                     if attempt < max_retries - 1:
@@ -1074,7 +864,7 @@ class AnalysisGUI:
                         return
             
             # Add metadata header comment back
-            with open(comparison_file, 'r') as f:
+            with open(comparison_file, 'r', encoding='utf-8') as f:
                 content = f.read()
             
             header_comment = f"""# Ramp Analysis Results Comparison
@@ -1088,26 +878,18 @@ class AnalysisGUI:
 #
 """
             
-            with open(comparison_file, 'w') as f:
+            with open(comparison_file, 'w', encoding='utf-8') as f:
                 f.write(header_comment + content)
             
             # Refresh the display
             self.refresh_comparison_table()
             
-            # Show success message
-            messagebox.showinfo("Success", "Column order has been updated successfully.")
-            self.add_terminal_output(f"Applied new column order: {' → '.join(new_order)}")
+            # Log success to terminal
+            self.add_terminal_output(f"✓ Applied new column order: {' → '.join(new_order)}")
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to reorder columns: {str(e)}")
             print(f"Error reordering columns: {e}")
-                
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to load comparison data: {str(e)}")
-            # Clear the table on error
-            for item in self.comparison_tree.get_children():
-                self.comparison_tree.delete(item)
-            self.comparison_tree.heading("#0", text="Error loading data")
     
     def export_comparison_table(self):
         """Export the comparison table to a new CSV file"""
@@ -1126,9 +908,8 @@ class AnalysisGUI:
         if file_path:
             try:
                 # Copy the comparison file to the new location
-                import shutil
                 shutil.copy2(comparison_file, file_path)
-                messagebox.showinfo("Success", f"Comparison table exported to {os.path.basename(file_path)}")
+                self.add_terminal_output(f"✓ Comparison table exported to {os.path.basename(file_path)}")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to export table: {str(e)}")
     
@@ -1143,7 +924,7 @@ class AnalysisGUI:
             return {
                 'duration': parts[0],
                 'direction': parts[1], 
-                'curve': self._curve_code_to_display(parts[2])  # Convert to display name
+                'curve': DataUtilities.curve_code_to_display(parts[2])  # Convert to display name
             }
         return None
     
@@ -1198,7 +979,7 @@ class AnalysisGUI:
         
         try:
             # Read the comparison file
-            df = pd.read_csv(comparison_file, index_col=0, comment='#')
+            df = pd.read_csv(comparison_file, index_col=0, comment='#', encoding='utf-8')
             
             if df.empty:
                 return
@@ -1266,12 +1047,15 @@ class AnalysisGUI:
         self.comparison_tree.heading("Metric", text="Metric", anchor=tk.W)
         
         # Calculate optimal width for Metric column (excluding Source_File)
-        display_metrics = [metric for metric in df.index if metric != 'Source_File']
+        display_metrics = [str(metric) for metric in df.index if str(metric) != 'Source_File']
         if display_metrics:
-            metric_width = max(
-                len("Metric") * 8,
-                max([len(str(metric)) for metric in display_metrics] + [len("Exported Date"), len("Exported Time")]) * 8 + 20
-            )
+            try:
+                metric_width = max(
+                    len("Metric") * 8,
+                    max([len(str(metric)) for metric in display_metrics] + [len("Exported Date"), len("Exported Time")]) * 8 + 20
+                )
+            except (TypeError, ValueError):
+                metric_width = len("Exported Date") * 8 + 20
         else:
             metric_width = len("Exported Date") * 8 + 20
             
@@ -1321,9 +1105,9 @@ class AnalysisGUI:
             else:
                 if 'Source_File' in df.index:
                     source_file = df.loc['Source_File', col]
-                    extracted_date, extracted_time = self._extract_timestamp_from_column(source_file)
+                    extracted_date, extracted_time = DataUtilities.extract_timestamp_from_column(source_file)
                 else:
-                    extracted_date, extracted_time = self._extract_timestamp_from_column(col)
+                    extracted_date, extracted_time = DataUtilities.extract_timestamp_from_column(col)
                 date_values.append(extracted_date)
                 time_values.append(extracted_time)
         
@@ -1340,7 +1124,7 @@ class AnalysisGUI:
                 if col == "Units":
                     formatted_values.append(str(raw_value))
                 else:
-                    formatted_values.append(self._format_for_display(raw_value, 'Ramp_Rate'))
+                    formatted_values.append(DataUtilities.format_for_display(raw_value, 'Ramp_Rate'))
             
             self.comparison_tree.insert("", next_row, values=formatted_values)
             next_row += 1
@@ -1356,7 +1140,7 @@ class AnalysisGUI:
                 if col == "Units":
                     formatted_values.append(str(raw_value))
                 else:
-                    formatted_values.append(self._format_for_display(raw_value, metric))
+                    formatted_values.append(DataUtilities.format_for_display(raw_value, metric))
             
             self.comparison_tree.insert("", tk.END, values=formatted_values)
         
@@ -1405,7 +1189,7 @@ class AnalysisGUI:
                 return
             
             # Read the file
-            df = pd.read_csv(comparison_file, index_col=0, comment='#')
+            df = pd.read_csv(comparison_file, index_col=0, comment='#', encoding='utf-8')
             if df.empty or metric_name not in df.index:
                 return
             
@@ -1454,10 +1238,10 @@ class AnalysisGUI:
             
             # Save the sorted dataframe
             try:
-                df_sorted.to_csv(comparison_file)
+                df_sorted.to_csv(comparison_file, encoding='utf-8')
                 
                 # Add metadata header comment back
-                with open(comparison_file, 'r') as f:
+                with open(comparison_file, 'r', encoding='utf-8') as f:
                     content = f.read()
                 
                 header_comment = f"""# Ramp Analysis Results Comparison
@@ -1471,7 +1255,7 @@ class AnalysisGUI:
 #
 """
                 
-                with open(comparison_file, 'w') as f:
+                with open(comparison_file, 'w', encoding='utf-8') as f:
                     f.write(header_comment + content)
                 
                 # Refresh the display to show sorted columns
@@ -1523,7 +1307,7 @@ class AnalysisGUI:
                 return
             
             # Read the file
-            df = pd.read_csv(comparison_file, index_col=0, comment='#')
+            df = pd.read_csv(comparison_file, index_col=0, comment='#', encoding='utf-8')
             if df.empty or metric_name not in df.index:
                 return
             
@@ -1572,10 +1356,10 @@ class AnalysisGUI:
             
             # Save the sorted dataframe
             try:
-                df_sorted.to_csv(comparison_file)
+                df_sorted.to_csv(comparison_file, encoding='utf-8')
                 
                 # Add metadata header comment back
-                with open(comparison_file, 'r') as f:
+                with open(comparison_file, 'r', encoding='utf-8') as f:
                     content = f.read()
                 
                 header_comment = f"""# Ramp Analysis Results Comparison
@@ -1589,7 +1373,7 @@ class AnalysisGUI:
 #
 """
                 
-                with open(comparison_file, 'w') as f:
+                with open(comparison_file, 'w', encoding='utf-8') as f:
                     f.write(header_comment + content)
                 
                 # Refresh the display to show sorted columns
@@ -1665,7 +1449,7 @@ class AnalysisGUI:
             
             # Count columns
             try:
-                df = pd.read_csv(comparison_file, index_col=0, comment='#')
+                df = pd.read_csv(comparison_file, index_col=0, comment='#', encoding='utf-8')
                 num_columns = len([col for col in df.columns if col != 'Units'])
                 num_metrics = len(df.index)
                 
@@ -1723,7 +1507,7 @@ class AnalysisGUI:
         
         try:
             # Read the CSV file
-            df = pd.read_csv(comparison_file, index_col=0, comment='#')
+            df = pd.read_csv(comparison_file, index_col=0, comment='#', encoding='utf-8')
             
             # Check if column exists
             if self.selected_column not in df.columns:
@@ -1737,7 +1521,7 @@ class AnalysisGUI:
             max_retries = 3
             for attempt in range(max_retries):
                 try:
-                    df.to_csv(comparison_file)
+                    df.to_csv(comparison_file, encoding='utf-8')
                     break  # Success, exit retry loop
                 except PermissionError:
                     if attempt < max_retries - 1:
@@ -1763,7 +1547,7 @@ class AnalysisGUI:
                         return
             
             # Add metadata header comment back
-            with open(comparison_file, 'r') as f:
+            with open(comparison_file, 'r', encoding='utf-8') as f:
                 content = f.read()
             
             header_comment = f"""# Ramp Analysis Results Comparison
@@ -1777,15 +1561,14 @@ class AnalysisGUI:
 #
 """
             
-            with open(comparison_file, 'w') as f:
+            with open(comparison_file, 'w', encoding='utf-8') as f:
                 f.write(header_comment + content)
             
             # Refresh the display
             self.refresh_comparison_table()
             
-            # Show success message
-            messagebox.showinfo("Success", f"Column '{self.selected_column}' has been removed successfully.")
-            self.add_terminal_output(f"Removed column '{self.selected_column}' from comparison table")
+            # Log success to terminal
+            self.add_terminal_output(f"✓ Removed column '{self.selected_column}' from comparison table")
             
             # Clear selection
             self.selected_column = None
@@ -1819,7 +1602,7 @@ class AnalysisGUI:
             self.file_path = file_path
             
             # Extract timestamp from filename for use in comparison table
-            self.current_file_timestamp = self._extract_timestamp_from_column(filename)
+            self.current_file_timestamp = DataUtilities.extract_timestamp_from_column(filename)
             
             self.analyze_button.config(state="normal")
             self.status_label.config(text=f"File selected: {filename}")
@@ -1847,12 +1630,8 @@ class AnalysisGUI:
             except ValueError:
                 pass
         
+        # Only pass time_limit, all plot selection is now handled by selected_plot_ids in _create_and_display_plots
         return AnalysisOptions(
-            temperature_response=self.plot_vars['temperature_response'].get(),
-            stability_analysis=self.plot_vars['stability_analysis'].get(),
-            spatial_gradients=self.plot_vars['spatial_gradients'].get(),
-            heat_transfer_3d=self.plot_vars['heat_transfer_3d'].get(),
-            temperature_difference=self.plot_vars['temperature_difference'].get(),
             time_limit=time_limit
         )
     
@@ -1865,7 +1644,7 @@ class AnalysisGUI:
         try:
             analyzer = DynamicRampAnalyzer()
             timestamp = analyzer.save_analysis_results(self.last_data_package)
-            messagebox.showinfo("Success", f"Analysis results saved with timestamp: {timestamp}")
+            self.add_terminal_output(f"✓ Analysis results saved with timestamp: {timestamp}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save results: {str(e)}")
     
@@ -2033,7 +1812,7 @@ class AnalysisGUI:
                 self.root.after(0, lambda: self.add_terminal_output(f"Loading file: {os.path.basename(self.file_path)}"))
                 
                 # Load data first to store for potential saving
-                data_package = DataLoader.load_and_parse_aspen_data(self.file_path)
+                data_package = self.data_loader.load_data(self.file_path)
                 if data_package:
                     self.last_data_package = data_package
                     self.root.after(0, lambda: self.save_button.config(state="normal"))
@@ -2083,39 +1862,59 @@ class AnalysisGUI:
                     self.root.after(0, lambda: self.add_terminal_output(""))
                     self.root.after(0, lambda: self.add_terminal_output("Updating results comparison..."))
                     try:
-                        # Extract metrics from processed data
-                        data_dict = {
-                            'time_vector': self.processed_data['time_vector'],
-                            'variables': {'T_cat (°C)': self.processed_data['catalyst_temp_matrix']},
-                            'length_vector': self.processed_data['length_vector'],
-                            'dimensions': {'n_time': len(self.processed_data['time_vector']), 
-                                         'm_length': len(self.processed_data['length_vector'])},
-                            'file_path': self.file_path
-                        }
-                        
-                        # Add bulk temperature if available
-                        if 'bulk_temp_matrix' in self.processed_data and self.processed_data['bulk_temp_matrix'] is not None:
-                            data_dict['variables']['T (°C)'] = self.processed_data['bulk_temp_matrix']
-                        
-                        # Add heat transfer if available
-                        if 'heat_transfer_matrix' in self.processed_data:
-                            data_dict['variables']['Heat Transfer with coolant (kW/m2)'] = self.processed_data['heat_transfer_matrix']
-                        
-                        # Create analysis engine and extract metrics
+                        # Pass all processed data directly to the analysis engine
                         from analysis_engine import AnalysisEngine
                         engine = AnalysisEngine()
-                        engine.data_package = data_dict
-                        engine.ramp_params = self.processed_data['ramp_params']
+                        engine.data_package = self.processed_data
+                        engine.ramp_params = self.processed_data.get('ramp_params')
                         engine.steady_state_time = self.processed_data.get('steady_state_time')
                         engine.stability_metrics = self.processed_data.get('stability_metrics', {'threshold': 0.05, 'min_rms_rate': 0.0})
                         
+                        # Add detailed debugging for metrics extraction
+                        self.root.after(0, lambda: self.add_terminal_output("Extracting key metrics..."))
                         metrics = engine.extract_key_metrics()
                         
-                        ResultsComparison.update_comparison_file(metrics)
-                        self.root.after(0, lambda: self.add_terminal_output("Results comparison updated successfully"))
+                        # Debug metrics type and content
+                        print(f"DEBUG: metrics type: {type(metrics)}")
+                        print(f"DEBUG: metrics content: {metrics}")
+                        
+                        # Ensure metrics is a dictionary
+                        if not isinstance(metrics, dict):
+                            error_msg = f"Warning: extract_key_metrics returned {type(metrics)}, expected dict. Content: {metrics}"
+                            print(error_msg)
+                            self.root.after(0, lambda msg=error_msg: self.add_terminal_output(msg))
+                            metrics = {}
+                        
+                        # Transform metrics to expected format for ResultsComparison
+                        if metrics and 'Units' in metrics:
+                            units = metrics.pop('Units')  # Remove Units from main metrics
+                            
+                            # Transform flat structure to nested structure
+                            transformed_metrics = {}
+                            for key, value in metrics.items():
+                                unit = units.get(key, '-')  # Get unit or default to '-'
+                                transformed_metrics[key] = {
+                                    'value': str(value),
+                                    'unit': unit
+                                }
+                            
+                            print(f"DEBUG: transformed_metrics: {transformed_metrics}")
+                            
+                            if transformed_metrics:
+                                self.root.after(0, lambda: self.add_terminal_output("Updating comparison file..."))
+                                ResultsComparison.update_comparison_file(transformed_metrics)
+                                self.root.after(0, lambda: self.add_terminal_output("Results comparison updated successfully"))
+                            else:
+                                self.root.after(0, lambda: self.add_terminal_output("Warning: No transformed metrics, skipping comparison update"))
+                        else:
+                            self.root.after(0, lambda: self.add_terminal_output("Warning: No metrics or Units found, skipping comparison update"))
+                            
                     except Exception as e:
-                        self.root.after(0, lambda: self.add_terminal_output(f"Failed to update comparison: {str(e)}"))
+                        error_msg = f"Failed to update comparison: {str(e)}"
+                        self.root.after(0, lambda msg=error_msg: self.add_terminal_output(msg))
                         print(f"Comparison update error: {e}")  # For debugging
+                        import traceback
+                        traceback.print_exc()  # Print full traceback for debugging
             else:
                 self.root.after(0, lambda: self.status_label.config(text="Analysis failed. Check terminal for errors."))
                 self.root.after(0, lambda: self.add_terminal_output("Analysis failed"))
@@ -2130,6 +1929,12 @@ class AnalysisGUI:
         finally:
             self.root.after(0, self._analysis_finished)
     
+    def _analysis_finished(self):
+        """Clean up after analysis completion (success or failure)"""
+        self.progress.stop()
+        self.analyze_button.config(state="normal")
+        # Don't change status here as it should already be set by the success/failure handlers
+    
     def _create_and_display_plots(self):
         """Create and display plots in main thread using processed data"""
         try:
@@ -2137,522 +1942,56 @@ class AnalysisGUI:
                 self.status_label.config(text="Creating plots...")
                 self.add_terminal_output("Creating plots...")
                 self.add_terminal_output("")
-                
-                data = self.processed_data
-                options = self.analysis_options
-                
+
+                # Dynamically get selected plot IDs from plot_vars
+                selected_plot_ids = [plot_id for plot_id, var in self.plot_vars.items() if var.get()]
                 generated_plots = []
-                
-                if options.temperature_response:
-                    self.add_terminal_output("Generating temperature response plots...")
-                    try:
-                        fig = PlotGen.create_temperature_response_plots(
-                            data['time_vector'], data['catalyst_temp_matrix'], data['length_vector'],
-                            data['ramp_params'], data['steady_state_time'], self.file_path, options.time_limit
-                        )
-                        generated_plots.append(("Temperature Response", fig))
-                        self.add_terminal_output("   Temperature response plots completed")
-                    except Exception as e:
-                        self.add_terminal_output(f"   Error generating temperature response plots: {e}")
-                
-                if options.stability_analysis and data.get('stability_metrics'):
-                    self.add_terminal_output("Generating stability analysis plots...")
-                    try:
-                        fig = PlotGen.create_stability_analysis_plots(
-                            data['time_vector'], data['stability_metrics'], data['ramp_params'],
-                            data['steady_state_time'], self.file_path, options.time_limit
-                        )
-                        generated_plots.append(("Stability Analysis", fig))
-                        self.add_terminal_output("   Stability analysis plots completed")
-                    except Exception as e:
-                        self.add_terminal_output(f"   Error generating stability plots: {e}")
-                
-                if options.spatial_gradients:
-                    self.add_terminal_output("Generating spatial gradient analysis plots...")
-                    try:
-                        fig = PlotGen.create_spatial_gradient_plots(
-                            data['time_vector'], data['catalyst_temp_matrix'], data['length_vector'],
-                            data['ramp_params'], self.file_path, options.time_limit
-                        )
-                        generated_plots.append(("Spatial Gradients", fig))
-                        self.add_terminal_output("   Spatial gradient plots completed")
-                    except Exception as e:
-                        self.add_terminal_output(f"   Error generating spatial gradient plots: {e}")
-                
-                if options.heat_transfer_3d and data.get('heat_transfer_matrix') is not None:
-                    self.add_terminal_output("Generating 3D heat transfer plots...")
-                    try:
-                        fig = PlotGen.create_3d_heat_transfer_plots(
-                            data['time_vector'], data['heat_transfer_matrix'], data['length_vector'],
-                            data['ramp_params'], data['steady_state_time'], self.file_path, options.time_limit
-                        )
-                        generated_plots.append(("3D Heat Transfer", fig))
-                        self.add_terminal_output("   3D heat transfer plots completed")
-                    except Exception as e:
-                        self.add_terminal_output(f"   Error generating 3D heat transfer plots: {e}")
-                
-                if options.temperature_difference:
-                    self.add_terminal_output("Checking temperature difference data...")
-                    bulk_temp_matrix = data.get('bulk_temp_matrix')
-                    
-                    # Create 2D heatmap for temperature difference (Tcat - T)
-                    self.add_terminal_output("   Creating temperature difference heatmap (Tcat - T)")
-                    try:
-                        import numpy as np
-                        import matplotlib.pyplot as plt
-                        
-                        # Get the actual data
-                        time_vector = data['time_vector']
-                        catalyst_temp_matrix = data['catalyst_temp_matrix']
-                        length_vector = data['length_vector']
-                        
-                        # Check if bulk temperature is available
-                        if bulk_temp_matrix is not None:
-                            self.add_terminal_output(f"   Using bulk temperature data (shape: {bulk_temp_matrix.shape})")
-                            bulk_temp = bulk_temp_matrix
-                        else:
-                            # If no bulk temperature, use a reasonable approximation
-                            # Assume bulk temperature is slightly lower than catalyst temperature
-                            self.add_terminal_output("   No bulk temperature data - using approximation (Tcat - 5°C)")
-                            bulk_temp = catalyst_temp_matrix - 5.0
-                        
-                        # Calculate temperature difference (Tcat - T)
-                        temp_diff_matrix = catalyst_temp_matrix - bulk_temp
-                        
-                        # Apply time limit if specified
-                        time_limit = options.time_limit if options.time_limit else time_vector.max()
-                        time_mask = time_vector <= time_limit
-                        time_filtered = time_vector[time_mask]
-                        temp_diff_filtered = temp_diff_matrix[time_mask, :]
-                        
-                        # Create 2D heatmap
-                        fig, ax = plt.subplots(figsize=(14, 8))
-                        
-                        # Create custom colormap where 0 is white
-                        import matplotlib.colors as mcolors
-                        
-                        # Get the min and max values to center the colormap at 0
-                        vmin = temp_diff_filtered.min()
-                        vmax = temp_diff_filtered.max()
-                        
-                        # Create a symmetric range around 0 for better visualization
-                        abs_max = max(abs(vmin), abs(vmax))
-                        
-                        # Create heatmap using imshow with centered colormap
-                        # Transpose to have time on x-axis and length on y-axis
-                        im = ax.imshow(temp_diff_filtered.T, 
-                                      cmap='RdBu_r',  # Red-Blue colormap (reversed so red=positive, blue=negative)
-                                      aspect='auto',
-                                      extent=[time_filtered.min(), time_filtered.max(), 
-                                             length_vector.min(), length_vector.max()],
-                                      origin='lower',
-                                      interpolation='bilinear',
-                                      vmin=-abs_max,  # Center colormap at 0
-                                      vmax=abs_max)
-                        
-                        # Add colorbar
-                        cbar = plt.colorbar(im, ax=ax, label='Temperature Difference (Tcat - T) [°C]')
-                        cbar.ax.tick_params(labelsize=10)
-                        
-                        # Set labels and title
-                        ax.set_xlabel('Time (min)', fontsize=12)
-                        ax.set_ylabel('Reactor Length (m)', fontsize=12)
-                        ax.set_title('Temperature Difference Heatmap (Tcat - T)', 
-                                   fontsize=14, fontweight='bold')
-                        
-                        # Add grid for better readability
-                        ax.grid(True, alpha=0.3, color='white', linewidth=0.5)
-                        
-                        # Improve tick formatting
-                        ax.tick_params(axis='both', which='major', labelsize=10)
-                        
-                        # Add contour lines for better visualization
-                        try:
-                            X, Y = np.meshgrid(time_filtered, length_vector)
-                            contour = ax.contour(X, Y, temp_diff_filtered.T, 
-                                               levels=10, colors='black', alpha=0.4, linewidths=0.5)
-                            ax.clabel(contour, inline=True, fontsize=8, fmt='%.1f°C')
-                        except:
-                            pass  # Skip contours if they cause issues
-                        
-                        generated_plots.append(("Temperature Difference (Heatmap)", fig))
-                        self.add_terminal_output(f"   Temperature difference heatmap created successfully")
-                        self.add_terminal_output(f"   Data shape: {temp_diff_filtered.shape} (time × length)")
-                        self.add_terminal_output(f"   Temperature difference range: {temp_diff_filtered.min():.2f} - {temp_diff_filtered.max():.2f} °C")
-                    except Exception as e:
-                        self.add_terminal_output(f"   ERROR creating 3D temperature difference plot: {e}")
-                        import traceback
-                        self.add_terminal_output(f"   Full error: {traceback.format_exc()}")
-                    
-                    # Original code for reference (commented out)
-                    # if bulk_temp_matrix is not None:
-                    #     self.add_terminal_output(f"   Bulk temperature matrix shape: {bulk_temp_matrix.shape}")
-                    #     self.add_terminal_output("   Generating temperature difference plots...")
-                    #     try:
-                    #         fig = PlotGen.create_temperature_difference_plots(
-                    #             data['time_vector'], data['catalyst_temp_matrix'], data['bulk_temp_matrix'], data['length_vector'],
-                    #             data['ramp_params'], data['steady_state_time'], self.file_path, options.time_limit
-                    #         )
-                    #         generated_plots.append(("Temperature Difference", fig))
-                    #         self.add_terminal_output("   Temperature difference plots completed")
-                    #     except Exception as e:
-                    #         self.add_terminal_output(f"   Error generating temperature difference plots: {e}")
-                    #         import traceback
-                    #         self.add_terminal_output(f"   Full error: {traceback.format_exc()}")
-                    # else:
-                    #     self.add_terminal_output("   Bulk temperature matrix is None - cannot generate temperature difference plots")
-                    #     self.add_terminal_output("   Available data keys:")
-                    #     for key in data.keys():
-                    #         self.add_terminal_output(f"     - {key}: {type(data[key])}")
-                    #     if 'variables' in data:
-                    #         self.add_terminal_output("   Available variables:")
-                    #         for var_key in data.get('variables', {}).keys():
-                    #             self.add_terminal_output(f"     - {var_key}")
-                
-                # Store generated plots
+                if selected_plot_ids:
+                    from plot_factory import generate_plots
+                    generated_plots = generate_plots(
+                        selected_plot_ids,
+                        self.processed_data,
+                        self.file_path,
+                        self.analysis_options.time_limit,
+                        self.add_terminal_output
+                    )
                 self.generated_plots = generated_plots
-                
-                # Show user choice dialog and handle accordingly
-                if generated_plots:
-                    self.add_terminal_output("")
-                    self.add_terminal_output(f"Plot generation completed! Generated {len(generated_plots)} plot set(s):")
-                    for plot_name, _ in generated_plots:
-                        self.add_terminal_output(f"   {plot_name}")
-                    self.add_terminal_output("")
-                    
-                    # Show choice dialog
-                    user_choice = self._show_plot_choice_dialog(generated_plots)
-                    
-                    # Handle user choice
-                    if user_choice == "view_and_save":
-                        self.add_terminal_output("Displaying plots...")
-                        plt.show()
-                        self.add_terminal_output("Saving plot images...")
-                        saved_dir = self._save_plots_to_files(generated_plots)
-                        messagebox.showinfo("Success", 
-                                          f"Analysis completed!\n\n"
-                                          f"• Plots displayed\n"
-                                          f"• Images saved to: {os.path.basename(saved_dir)}")
-                        
-                    elif user_choice == "view_only":
-                        self.add_terminal_output("Displaying plots...")
-                        plt.show()
-                        messagebox.showinfo("Success", "Analysis completed! Plots displayed.")
-                        
-                    elif user_choice == "save_only":
-                        self.add_terminal_output("Saving plot images...")
-                        saved_dir = self._save_plots_to_files(generated_plots)
-                        # Close all figures to free memory
-                        for _, fig in generated_plots:
-                            plt.close(fig)
-                        messagebox.showinfo("Success", 
-                                          f"Analysis completed!\n\n"
-                                          f"• Plot images saved to: {os.path.basename(saved_dir)}")
-                        
-                    elif user_choice == "neither":
-                        self.add_terminal_output("Analysis completed - plots generated but not displayed or saved.")
-                        # Close all figures to free memory
-                        for _, fig in generated_plots:
-                            plt.close(fig)
-                        messagebox.showinfo("Success", "Analysis completed!")
-                        
-                else:
-                    self.add_terminal_output("No plots were generated")
-                    messagebox.showwarning("Warning", "No plots were generated.")
-                    
         except Exception as e:
-            print(f"Error creating plots: {e}")
-            messagebox.showerror("Error", f"Error creating plots: {str(e)}")
+            self.add_terminal_output(f"Error in plot generation: {e}")
 
-    def _display_plots(self):
-        """Display plots in main thread"""
+        # Show user choice dialog and handle accordingly
         if hasattr(self, 'generated_plots') and self.generated_plots:
-            print(f"\nAnalysis completed! Generated {len(self.generated_plots)} plot set(s):")
+            self.add_terminal_output("")
+            self.add_terminal_output(f"Plot generation completed! Generated {len(self.generated_plots)} plot set(s):")
             for plot_name, _ in self.generated_plots:
-                print(f"  {plot_name}")
-            
-            print("\nDisplaying plots...")
-            # Use plt.show() to display all figures
-            plt.show()
-    
-    def _analysis_finished(self):
-        """Clean up after analysis"""
-        self.progress.stop()
-        self.analyze_button.config(state="normal")
-    
-    def run(self):
-        """Run the GUI application"""
-        self.root.mainloop()
+                self.add_terminal_output(f"   {plot_name}")
+            self.add_terminal_output("")
 
-class DynamicRampAnalyzer:
-    """Main analyzer class that coordinates all analysis components"""
-    
-    def __init__(self):
-        # Update matplotlib settings if ConfigManager is available
-        if ConfigMgr:
-            ConfigMgr.update_matplotlib_settings()
-            self.config = ConfigMgr.get_config()
+            # Show choice dialog
+            user_choice = self._show_plot_choice_dialog(self.generated_plots)
+
+            # Handle user choice
+            if user_choice == "view_and_save":
+                self.add_terminal_output("Displaying plots...")
+                self.add_terminal_output("Saving plot images...")
+                saved_dir = self._save_plots_to_files(self.generated_plots)
+                self.add_terminal_output(f"✓ Analysis completed! Plots displayed and images saved to: {os.path.basename(saved_dir)}")
+            elif user_choice == "view_only":
+                self.add_terminal_output("Displaying plots...")
+                self.add_terminal_output("✓ Analysis completed! Plots displayed.")
+            elif user_choice == "save_only":
+                self.add_terminal_output("Saving plot images...")
+                saved_dir = self._save_plots_to_files(self.generated_plots)
+                self.add_terminal_output(f"✓ Analysis completed! Plot images saved to: {os.path.basename(saved_dir)}")
+            elif user_choice == "neither":
+                self.add_terminal_output("Analysis completed - plots generated but not displayed or saved.")
+                self.add_terminal_output("✓ Analysis completed!")
         else:
-            self.config = {}
-    
-    def run_data_processing_only(self, file_path: str, options: AnalysisOptions) -> bool:
-        """Run data processing only (no plotting) for threading"""
-        try:
-            print("="*60)
-            print("DYNAMIC REACTOR RAMP ANALYSIS")
-            print("="*60)
-            
-            # Load data
-            print("Loading and parsing data...")
-            data_package = DataLoader.load_and_parse_aspen_data(file_path)
-            if data_package is None:
-                print("❌ Failed to load data")
-                return False
-            
-            print("✓ Data loaded successfully")
-            
-            # Parse ramp parameters
-            ramp_params = DataLoader.parse_ramp_parameters_from_filename(file_path)
-            
-            if ramp_params.duration and ramp_params.direction and ramp_params.curve_shape:
-                print(f"✓ Ramp parameters detected: {ramp_params.duration}min {ramp_params.direction}-{ramp_params.curve_shape}")
-            else:
-                print("⚠ Using fallback ramp detection")
-            
-            # Extract data
-            time_vector = data_package['time_vector']
-            catalyst_temp_matrix = data_package['variables']['T_cat (°C)']
-            bulk_temp_matrix = data_package['variables'].get('T (°C)')
-            length_vector = data_package['length_vector']
-            
-            # Detect steady state
-            print("\nDetecting steady state conditions...")
-            search_start_time = ramp_params.end_time if ramp_params.end_time else None
-            steady_state_config = self.config['steady_state']
-            
-            steady_state_time, stability_metrics = SteadyStateDetector.detect_steady_state(
-                time_vector, catalyst_temp_matrix, 
-                threshold=steady_state_config['threshold'],
-                min_duration=steady_state_config['min_duration'],
-                search_start_time=search_start_time
-            )
-            
-            if steady_state_time:
-                print(f"✓ Steady state detected at t = {steady_state_time:.1f} min")
-            else:
-                print("⚠ No steady state detected in analysis period")
-            
-            # Generate analysis report
-            if AnalysisRep:
-                AnalysisRep.print_analysis_summary(
-                    data_package, ramp_params, steady_state_time, stability_metrics
-                )
-            
-            # Update results comparison file
-            print("\nUpdating results comparison file...")
-            try:
-                # Create analysis engine and extract metrics  
-                from analysis_engine import AnalysisEngine
-                engine = AnalysisEngine()
-                engine.data_package = data_package
-                engine.ramp_params = ramp_params
-                engine.steady_state_time = steady_state_time
-                engine.stability_metrics = stability_metrics
-                
-                metrics = engine.extract_key_metrics()
-                comparison_file = ResultsComparison.update_comparison_file(metrics)
-                print(f"Results comparison file updated: {os.path.basename(comparison_file)}")
-            except Exception as e:
-                print(f"Warning: Could not update results comparison file: {e}")
-            
-            # Store processed data for main thread plotting
-            self.processed_data = {
-                'time_vector': time_vector,
-                'catalyst_temp_matrix': catalyst_temp_matrix,
-                'bulk_temp_matrix': bulk_temp_matrix,
-                'length_vector': length_vector,
-                'ramp_params': ramp_params,
-                'steady_state_time': steady_state_time,
-                'stability_metrics': stability_metrics,
-                'heat_transfer_matrix': data_package['variables'].get('Heat Transfer with coolant (kW/m2)')
-            }
-            
-            return True
-            
-        except Exception as e:
-            print(f"❌ Data processing failed: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-    
-    def run_analysis(self, file_path: str, options: AnalysisOptions) -> bool:
-        """Run complete analysis based on options"""
-        success = self.run_analysis_no_display(file_path, options)
-        
-        # Show results if successful
-        if success and hasattr(self, 'generated_plots') and self.generated_plots:
-            print(f"\nAnalysis completed! Generated {len(self.generated_plots)} plot set(s):")
-            for plot_name, _ in self.generated_plots:
-                print(f"  {plot_name}")
-            
-            print("\nDisplaying plots...")
-            # Display all figures
-            plt.show()
-        
-        return success
-    
-    def run_analysis_no_display(self, file_path: str, options: AnalysisOptions) -> bool:
-        """Run complete analysis based on options but don't display plots (for threading)"""
-        try:
-            print("="*60)
-            print("DYNAMIC REACTOR RAMP ANALYSIS")
-            print("="*60)
-            
-            # Load data
-            print("Loading and parsing data...")
-            data_package = DataLoader.load_and_parse_aspen_data(file_path)
-            if data_package is None:
-                print("❌ Failed to load data")
-                return False
-            
-            print("✓ Data loaded successfully")
-            
-            # Parse ramp parameters
-            ramp_params = DataLoader.parse_ramp_parameters_from_filename(file_path)
-            
-            if ramp_params.duration and ramp_params.direction and ramp_params.curve_shape:
-                print(f"✓ Ramp parameters detected: {ramp_params.duration}min {ramp_params.direction}-{ramp_params.curve_shape}")
-            else:
-                print("⚠ Using fallback ramp detection")
-            
-            # Extract data
-            time_vector = data_package['time_vector']
-            catalyst_temp_matrix = data_package['variables']['T_cat (°C)']
-            bulk_temp_matrix = data_package['variables'].get('T (°C)')
-            length_vector = data_package['length_vector']
-            
-            # Detect steady state
-            print("\nDetecting steady state conditions...")
-            search_start_time = ramp_params.end_time if ramp_params.end_time else None
-            steady_state_config = self.config['steady_state']
-            
-            steady_state_time, stability_metrics = SteadyStateDetector.detect_steady_state(
-                time_vector, catalyst_temp_matrix, 
-                threshold=steady_state_config['threshold'],
-                min_duration=steady_state_config['min_duration'],
-                search_start_time=search_start_time
-            )
-            
-            if steady_state_time:
-                print(f"✓ Steady state detected at t = {steady_state_time:.1f} min")
-            else:
-                print("⚠ No steady state detected in analysis period")
-            
-            # Generate analysis report
-            if AnalysisRep:
-                AnalysisRep.print_analysis_summary(
-                    data_package, ramp_params, steady_state_time, stability_metrics
-                )
-            
-            # Generate selected plots
-            print("\n" + "="*40)
-            print("GENERATING PLOTS")
-            print("="*40)
-            
-            self.generated_plots = []
-            
-            if options.temperature_response:
-                print("📊 Generating temperature response plots...")
-                try:
-                    fig = PlotGen.create_temperature_response_plots(
-                        time_vector, catalyst_temp_matrix, length_vector,
-                        ramp_params, steady_state_time, file_path, options.time_limit
-                    )
-                    self.generated_plots.append(("Temperature Response", fig))
-                    print("✓ Temperature response plots completed")
-                except Exception as e:
-                    print(f"❌ Error generating temperature response plots: {e}")
-            
-            if options.stability_analysis and stability_metrics:
-                print("📊 Generating stability analysis plots...")
-                try:
-                    fig = PlotGen.create_stability_analysis_plots(
-                        time_vector, stability_metrics, ramp_params,
-                        steady_state_time, file_path, options.time_limit
-                    )
-                    self.generated_plots.append(("Stability Analysis", fig))
-                    print("✓ Stability analysis plots completed")
-                except Exception as e:
-                    print(f"❌ Error generating stability plots: {e}")
-            
-            if options.spatial_gradients:
-                print("📊 Generating spatial gradient analysis plots...")
-                try:
-                    fig = PlotGen.create_spatial_gradient_plots(
-                        time_vector, catalyst_temp_matrix, length_vector,
-                        ramp_params, file_path, options.time_limit
-                    )
-                    self.generated_plots.append(("Spatial Gradients", fig))
-                    print("✓ Spatial gradient plots completed")
-                except Exception as e:
-                    print(f"❌ Error generating spatial gradient plots: {e}")
-            
-            if options.heat_transfer_3d:
-                print("📊 Generating 3D heat transfer plots...")
-                try:
-                    heat_transfer_matrix = data_package['variables'].get('Heat Transfer with coolant (kW/m2)')
-                    if heat_transfer_matrix is not None:
-                        fig = PlotGen.create_3d_heat_transfer_plots(
-                            time_vector, heat_transfer_matrix, length_vector,
-                            ramp_params, steady_state_time, file_path, options.time_limit
-                        )
-                        self.generated_plots.append(("3D Heat Transfer", fig))
-                        print("✓ 3D heat transfer plots completed")
-                    else:
-                        print("⚠ Heat transfer data not available for 3D plotting")
-                except Exception as e:
-                    print(f"❌ Error generating 3D heat transfer plots: {e}")
-            
-            if options.temperature_difference:
-                print("📊 Generating temperature difference plots...")
-                try:
-                    if bulk_temp_matrix is not None:
-                        fig = PlotGen.create_temperature_difference_plots(
-                            time_vector, catalyst_temp_matrix, bulk_temp_matrix, length_vector,
-                            ramp_params, steady_state_time, file_path, options.time_limit
-                        )
-                        self.generated_plots.append(("Temperature Difference", fig))
-                        print("✓ Temperature difference plots completed")
-                    else:
-                        print("⚠ Bulk temperature data not available for difference plotting")
-                except Exception as e:
-                    print(f"❌ Error generating temperature difference plots: {e}")
-            
-            # Check if any plots were generated
-            if self.generated_plots:
-                return True
-            else:
-                print("⚠ No plots were generated")
-                return False
-            
-        except Exception as e:
-            print(f"❌ Analysis failed: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-    
-    def save_analysis_results(self, data_package: Dict[str, Any], output_dir: Optional[str] = None) -> str:
-        """Save analysis results to files"""
-        if DataExp:
-            return DataExp.save_data_structure(data_package, output_dir)
-        else:
-            print("DataExporter not available - cannot save results")
-            return ""
+            self.add_terminal_output("No plots were generated")
+            messagebox.showwarning("Warning", "No plots were generated.")
 
-def main():
-    """Main entry point"""
-    app = AnalysisGUI()
-    app.run()
 
+# --- Entry point to launch the GUI ---
 if __name__ == "__main__":
-    main()
+    app = AnalysisGUI()
+    app.root.mainloop()

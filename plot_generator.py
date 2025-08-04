@@ -29,7 +29,7 @@ class PlotGenerator:
                                         steady_state_time: Optional[float],
                                         file_path: str,
                                         time_limit: Optional[float] = None) -> plt.Figure:
-        """Create main temperature response analysis plots"""
+        """Create main temperature response analysis plots with vertical layout"""
         
         # Filter data
         if time_limit is None:
@@ -39,7 +39,7 @@ class PlotGenerator:
         time_filtered = time_vector[time_mask]
         temp_filtered = catalyst_temp_matrix[time_mask, :]
         
-        # Apply plot time limit
+        # Apply plot time limit - cut where data ends
         plot_time_limit = time_limit
         if steady_state_time is not None and steady_state_time <= 60.0:
             plot_time_limit = min(60.0, time_limit)
@@ -80,47 +80,60 @@ class PlotGenerator:
         
         max_time_idx, max_pos_idx = global_max_pos
         
-        # Create plots
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        # Create vertical layout plots
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
         fig.canvas.manager.set_window_title(f"Temperature Response Analysis - {os.path.basename(file_path)}")
         
-        # Plot 1: Maximum relevant change rates
-        ax1.plot(time_plot, max_relevant_rates, rate_color, linewidth=2.5, 
-                label=f'Max {rate_label}')
+        # Create consolidated info banner at the top
+        direction = "up" if ramp_params.is_ramp_up else "down"
+        
+        # Extract curve type more safely
+        try:
+            if hasattr(ramp_params, 'curve_type') and ramp_params.curve_type:
+                curve_type = ramp_params.curve_type.lower()
+            else:
+                # Fallback: extract from analysis_title or default
+                curve_type = "linear"  # default fallback
+                if hasattr(ramp_params, 'analysis_title') and ramp_params.analysis_title:
+                    if "sinusoidal" in ramp_params.analysis_title.lower():
+                        curve_type = "sinusoidal"
+                    elif "linear" in ramp_params.analysis_title.lower():
+                        curve_type = "linear"
+        except:
+            curve_type = "linear"
+        
+        info_text = f"Ramp-{direction} test | {ramp_params.duration:.0f} min | {curve_type}"
+        fig.suptitle(info_text, fontsize=14, fontweight='bold', y=0.95)  # Higher position
+        
+        # Plot 1: Catalyst Temperature (Top)
+        temp_at_max_pos = temp_plot[:, max_pos_idx]
+        
+        ax1.plot(time_plot, temp_at_max_pos, 'b-', linewidth=2.5,
+                label=rf'$T_{{\mathrm{{cat}}}}$ at L = {length_vector[max_pos_idx]:.2f} m')
         
         # Add ramp period shading
         if ramp_params.duration:
             ax1.axvspan(ramp_params.start_time, ramp_params.end_time, 
-                       alpha=0.2, color='gray', 
-                       label=f'Ramp period ({ramp_params.duration} min)')
+                       alpha=0.2, color='gray', label='Ramp period')
         
         # Add steady state line
         if steady_state_time is not None:
             ax1.axvline(x=steady_state_time, color='green', linestyle='-', 
-                       alpha=0.8, linewidth=2, 
-                       label=f'Steady state (t = {steady_state_time:.1f} min)')
+                       alpha=0.8, linewidth=2, label='Steady state')
         
-        # Add zero reference for ramp-down
-        if ramp_params.is_ramp_down:
-            ax1.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
-        
-        # Mark global maximum
+        # Mark maximum response point (removed for cleaner appearance)
         global_max_time = time_plot[max_time_idx]
-        ax1.plot(global_max_time, global_max_rate, 'o', color=rate_color, 
-                markersize=10, label=f'Global max: {global_max_rate:.2f} °C min$^{{-1}}$')
+        # Removed marker from temperature plot for cleaner appearance
         
-        ax1.set_xlabel('Time (min)', fontsize=12)
-        ax1.set_ylabel(f'{rate_label} (°C min$^{{-1}}$)', fontsize=12)
-        ax1.set_title(f'Catalyst Temperature Response During {ramp_params.analysis_title}', fontsize=14)
-        ax1.set_xlim(time_plot[0], None)
+        ax1.set_ylabel('')  # Remove y-axis label
+        ax1.set_title(r'Catalyst Temperature $T_{\mathrm{cat}}$ (°C)', fontsize=13, pad=15)
+        ax1.set_xlim(time_plot[0], time_plot[-1])  # Cut where data ends
         ax1.grid(True, alpha=0.3)
-        ax1.legend(fontsize=10, framealpha=0.9)
+        ax1.legend(loc='lower left', fontsize=10, framealpha=0.9)
         
-        # Plot 2: Temperature at maximum change position
-        temp_at_max_pos = temp_plot[:, max_pos_idx]
-        
-        ax2.plot(time_plot, temp_at_max_pos, 'b-', linewidth=2.5,
-                label=rf'$T_{{\mathrm{{cat}}}}$ at L = {length_vector[max_pos_idx]:.2f} m')
+        # Plot 2: Temperature Change Rate (Bottom)
+        ax2.plot(time_plot, max_relevant_rates, rate_color, linewidth=2.5, 
+                label=f'Max {rate_label}')
         
         # Add ramp period shading
         if ramp_params.duration:
@@ -132,19 +145,23 @@ class PlotGenerator:
             ax2.axvline(x=steady_state_time, color='green', linestyle='-', 
                        alpha=0.8, linewidth=2, label='Steady state')
         
-        # Mark maximum response point
-        ax2.plot(global_max_time, temp_at_max_pos[max_time_idx], 'o', 
-                color=rate_color, markersize=10,
-                label=f'Max response point: {temp_at_max_pos[max_time_idx]:.1f} °C')
+        # Add zero reference for ramp-down
+        if ramp_params.is_ramp_down:
+            ax2.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+        
+        # Mark global maximum
+        ax2.plot(global_max_time, global_max_rate, 'o', color=rate_color, 
+                markersize=8, label=f'Global max: {global_max_rate:.2f} °C/min')
         
         ax2.set_xlabel('Time (min)', fontsize=12)
-        ax2.set_ylabel(r'$T_{\mathrm{cat}}$ (°C)', fontsize=12)
-        ax2.set_title(rf'Catalyst Temperature at L = {length_vector[max_pos_idx]:.2f} m', fontsize=14)
-        ax2.set_xlim(time_plot[0], None)
+        ax2.set_ylabel('')  # Remove y-axis label
+        ax2.set_title(r'Temperature Change Rate dTcat/dt (°C/min)', fontsize=13)
+        ax2.set_xlim(time_plot[0], time_plot[-1])  # Cut where data ends
         ax2.grid(True, alpha=0.3)
-        ax2.legend(fontsize=10, framealpha=0.9)
+        ax2.legend(loc='lower left', fontsize=10, framealpha=0.9)
         
         plt.tight_layout()
+        plt.subplots_adjust(top=0.85)  # Make more room for the info banner
         return fig
     
     @staticmethod
@@ -623,29 +640,134 @@ class PlotGenerator:
                                            steady_state_time: Optional[float],
                                            file_path: str,
                                            time_limit: Optional[float] = None) -> plt.Figure:
-        """Create temperature difference (Tcat - T) analysis plots"""
+        """Create process stream temperature plot at reactor outlet"""
         
-        # Filter data
+        # Apply time limit if specified
         if time_limit is None:
             time_limit = time_vector.max()
-            
         time_mask = time_vector <= time_limit
         time_filtered = time_vector[time_mask]
-        catalyst_temp_filtered = catalyst_temp_matrix[time_mask, :]
-        bulk_temp_filtered = bulk_temp_matrix[time_mask, :]
         
-        # Calculate temperature difference (Tcat - T)
-        temp_diff = catalyst_temp_filtered - bulk_temp_filtered
+        # Plot process stream temperature (T) at reactor outlet
+        if bulk_temp_matrix is not None:
+            print("Creating process stream temperature plot at reactor outlet...")
+            bulk_temp_filtered = bulk_temp_matrix[time_mask, :]
+            
+            # Extract temperature at reactor outlet (last position in length vector)
+            outlet_temp = bulk_temp_filtered[:, -1]  # Last column = reactor outlet
+            
+            plot_title = 'Process Stream Temperature at Reactor Outlet'
+            ylabel = 'Temperature (T) [°C]'
+            
+            # Create time series plot
+            fig, ax = plt.subplots(figsize=(12, 8))
+            fig.canvas.manager.set_window_title(f"Process Stream Temperature at Outlet - {os.path.basename(file_path)}")
+            
+            # Plot the outlet temperature vs time
+            line = ax.plot(time_filtered, outlet_temp, 
+                          linewidth=2.5, color='steelblue', 
+                          marker='o', markersize=4, markevery=max(1, len(time_filtered)//20),
+                          label=f'Outlet Temperature (L = {length_vector[-1]:.2f} m)')
+            
+            # Set labels and title
+            ax.set_xlabel('Time (min)', fontsize=12)
+            ax.set_ylabel(ylabel, fontsize=12)
+            ax.set_title(plot_title, fontsize=14, fontweight='bold')
+            
+            # Add grid for better readability
+            ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+            ax.tick_params(axis='both', which='major', labelsize=10)
+            
+            # Add legend
+            ax.legend(fontsize=10, loc='best')
+            
+            # Add statistics text box
+            min_temp = outlet_temp.min()
+            max_temp = outlet_temp.max()
+            avg_temp = outlet_temp.mean()
+            temp_range = max_temp - min_temp
+            
+            stats_text = f'Statistics:\nMin: {min_temp:.1f}°C\nMax: {max_temp:.1f}°C\nAvg: {avg_temp:.1f}°C\nRange: {temp_range:.1f}°C'
+            
+            ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, 
+                   verticalalignment='top', 
+                   bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8),
+                   fontsize=10)
+            
+            # Highlight min/max points
+            min_idx = np.argmin(outlet_temp)
+            max_idx = np.argmax(outlet_temp)
+            
+            ax.scatter(time_filtered[min_idx], outlet_temp[min_idx], 
+                      color='blue', s=100, marker='v', 
+                      label=f'Min: {min_temp:.1f}°C', zorder=5)
+            ax.scatter(time_filtered[max_idx], outlet_temp[max_idx], 
+                      color='red', s=100, marker='^', 
+                      label=f'Max: {max_temp:.1f}°C', zorder=5)
+            
+            # Update legend to include min/max markers
+            ax.legend(fontsize=10, loc='best')
+            
+            plt.tight_layout()
+            
+            print(f"✓ Process stream outlet temperature plot created successfully!")
+            print(f"  Temperature range: {min_temp:.1f}°C to {max_temp:.1f}°C")
+            print(f"  Average temperature: {avg_temp:.1f}°C")
+            
+        else:
+            print("Warning: No bulk temperature data available for outlet temperature plot")
+            print("Creating placeholder plot...")
+            
+            # Create placeholder plot when no bulk temperature data
+            fig, ax = plt.subplots(figsize=(12, 8))
+            fig.canvas.manager.set_window_title(f"Process Stream Temperature at Outlet - {os.path.basename(file_path)}")
+            ax.text(0.5, 0.5, 'No Process Stream Temperature Data Available\n\nPlease ensure bulk temperature data is loaded\nto display outlet temperature', 
+                   ha='center', va='center', transform=ax.transAxes,
+                   fontsize=14, bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+            ax.set_title('Process Stream Temperature at Reactor Outlet', fontsize=14, fontweight='bold')
+            ax.set_xlabel('Time (min)', fontsize=12)
+            ax.set_ylabel('Temperature (T) [°C]', fontsize=12)
+            plt.tight_layout()
         
-        # Check if temperature differences are very small (likely identical data)
-        max_abs_diff = np.nanmax(np.abs(temp_diff))
-        if max_abs_diff < 1e-6:
-            print("⚠ Warning: Temperature difference is extremely small (< 1e-6 °C)")
-            print("  This suggests T_cat and T are nearly identical in the dataset")
-            print("  This could happen if:")
-            print("    1. The simulation doesn't distinguish between catalyst and bulk temperatures")
-            print("    2. The system is at thermal equilibrium")
-            print("    3. There's an issue with how the data is exported from Aspen")
+        return fig
+    
+    @staticmethod 
+    def create_temperature_difference_plot(processed_data, time_limit, file_path):
+        """Create temperature difference analysis plots"""
+        print("Creating temperature difference analysis plots...")
+        
+        try:
+            time_filtered = processed_data.get('time_filtered')
+            length_vector = processed_data.get('length_vector')
+            catalyst_temperatures = processed_data.get('catalyst_temperatures')
+            bulk_temperatures = processed_data.get('bulk_temperatures')
+            steady_state_time = processed_data.get('steady_state_time')
+            ramp_params = processed_data.get('ramp_params')
+            
+            if time_filtered is None or catalyst_temperatures is None or length_vector is None:
+                print("Error: Required data not available for temperature difference plot")
+                return None
+            
+            # Calculate temperature difference (T_cat - T_bulk)
+            if bulk_temperatures is not None:
+                temp_diff = catalyst_temperatures - bulk_temperatures
+                max_abs_diff = np.max(np.abs(temp_diff))
+                
+                if max_abs_diff < 1e-10:
+                    print("Warning: Temperature difference is extremely small (< 1e-10°C)")
+                    print("  This suggests T_cat and T are nearly identical in the dataset")
+                    print("  This could happen if:")
+                    print("    1. The simulation doesn't distinguish between catalyst and bulk temperatures")
+                    print("    2. The system is at thermal equilibrium")
+                    print("    3. There's an issue with how the data is exported from Aspen")
+            else:
+                print("Warning: No bulk temperature data available, using catalyst temperatures only")
+                temp_diff = catalyst_temperatures
+                max_abs_diff = np.max(np.abs(temp_diff))
+        
+        except Exception as e:
+            print(f"Error in temperature difference analysis: {e}")
+            return None
         
         # Scale the difference for visualization if it's very small but non-zero
         temp_diff_scaled = temp_diff

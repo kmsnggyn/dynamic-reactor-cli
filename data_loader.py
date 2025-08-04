@@ -10,20 +10,61 @@ Date: August 2025
 """
 
 import os
-import re
 import pandas as pd
 import numpy as np
-from abc import ABC, abstractmethod
-from typing import Optional, Dict, List, Tuple, Any, Union
+import re
+from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass
 from enum import Enum
+
+def extract_timestamp_from_filename(file_path: str) -> Optional[str]:
+    """Extract timestamp from filename in format YYYYMMDD-HHMMSS"""
+    filename = os.path.basename(file_path)
+    # Look for pattern: 8 digits, hyphen, 6 digits (YYYYMMDD-HHMMSS)
+    timestamp_pattern = r'(\d{8}-\d{6})'
+    match = re.search(timestamp_pattern, filename)
+    return match.group(1) if match else None
+
+def extract_ramp_parameters_from_filename(file_path: str) -> Optional[Dict[str, Any]]:
+    """Extract ramp parameters from filename in format: duration-direction-curve_shape"""
+    filename = os.path.basename(file_path).lower()
+    filename_parts = filename.replace('.csv', '').split('-')
+    
+    # Remove timestamp parts (8+ digits)
+    clean_parts = []
+    for part in filename_parts:
+        if not (part.isdigit() and len(part) >= 8):
+            clean_parts.append(part)
+    
+    if len(clean_parts) >= 3:
+        try:
+            duration = int(clean_parts[0])
+            direction = clean_parts[1]
+            curve_shape = clean_parts[2]
+            
+            return {
+                'duration': duration,
+                'direction': direction,
+                'curve_shape': curve_shape,
+                'start_time': 10.0,  # Default start time
+                'end_time': 10.0 + duration
+            }
+        except (ValueError, IndexError):
+            pass
+    
+    # Fallback detection
+    ramp_info = {}
+    if "up" in filename:
+        ramp_info['direction'] = "up"
+    elif "down" in filename:
+        ramp_info['direction'] = "down"
+    
+    return ramp_info if ramp_info else None
 
 class DataFormat(Enum):
     """Supported data formats"""
     ASPEN_PLUS_DYNAMICS = "aspen_dynamics"
-    ASPEN_PLUS_STEADY = "aspen_steady"
     GENERIC_TIME_SERIES = "generic_timeseries"
-    CUSTOM_FORMAT = "custom"
 
 @dataclass
 class DataMetadata:
@@ -36,6 +77,8 @@ class DataMetadata:
     variables: List[str] = None
     units: Dict[str, str] = None
     parsing_notes: List[str] = None
+    file_timestamp: Optional[str] = None  # Extracted from filename (YYYYMMDD-HHMMSS)
+    ramp_parameters: Optional[Dict[str, Any]] = None  # Extracted ramp experiment parameters
 
 @dataclass
 class StandardDataPackage:
@@ -60,25 +103,7 @@ class StandardDataPackage:
         """Number of spatial points (0 if non-spatial)"""
         return len(self.length_vector) if self.length_vector is not None else 0
 
-class BaseDataParser(ABC):
-    """Abstract base class for data parsers"""
-    
-    @abstractmethod
-    def can_parse(self, file_path: str) -> bool:
-        """Check if this parser can handle the given file"""
-        pass
-    
-    @abstractmethod
-    def parse(self, file_path: str) -> Optional[StandardDataPackage]:
-        """Parse the file into standard data package"""
-        pass
-    
-    @abstractmethod
-    def get_format_description(self) -> str:
-        """Get human-readable description of format"""
-        pass
-
-class AspenDynamicsParser(BaseDataParser):
+class AspenDynamicsParser:
     """Parser for Aspen Plus Dynamics CSV files"""
     
     def can_parse(self, file_path: str) -> bool:
@@ -180,6 +205,10 @@ class AspenDynamicsParser(BaseDataParser):
                 "Heat Transfer with coolant (kW/m2)": "kW/m²"
             }
             
+            # Extract timestamp and ramp parameters from filename
+            file_timestamp = extract_timestamp_from_filename(file_path)
+            ramp_parameters = extract_ramp_parameters_from_filename(file_path)
+            
             metadata = DataMetadata(
                 format_type=DataFormat.ASPEN_PLUS_DYNAMICS,
                 source_file=file_path,
@@ -188,7 +217,9 @@ class AspenDynamicsParser(BaseDataParser):
                 spatial_range=(length_vector.min(), length_vector.max()),
                 variables=list(expected_variables),
                 units=units,
-                parsing_notes=parsing_issues
+                parsing_notes=parsing_issues,
+                file_timestamp=file_timestamp,
+                ramp_parameters=ramp_parameters
             )
             
             # Create standard data package
@@ -200,6 +231,11 @@ class AspenDynamicsParser(BaseDataParser):
             )
             
             print(f"  ✓ Successfully parsed {n_time} time points × {m_length} spatial points")
+            if file_timestamp:
+                print(f"  ✓ Extracted timestamp: {file_timestamp}")
+            if ramp_parameters:
+                ramp_desc = f"{ramp_parameters.get('duration', '?')}min {ramp_parameters.get('direction', '?')}-{ramp_parameters.get('curve_shape', '?')}"
+                print(f"  ✓ Extracted ramp parameters: {ramp_desc}")
             if parsing_issues:
                 print(f"  ⚠ {len(parsing_issues)} parsing issues noted")
             
@@ -212,7 +248,7 @@ class AspenDynamicsParser(BaseDataParser):
     def get_format_description(self) -> str:
         return "Aspen Plus Dynamics CSV export with spatial temperature and reaction data"
 
-class GenericTimeSeriesParser(BaseDataParser):
+class GenericTimeSeriesParser:
     """Parser for generic time-series CSV files"""
     
     def can_parse(self, file_path: str) -> bool:
@@ -266,6 +302,9 @@ class GenericTimeSeriesParser(BaseDataParser):
             print(f"  Variables: {list(variables.keys())}")
             
             # Create metadata
+            file_timestamp = extract_timestamp_from_filename(file_path)
+            ramp_parameters = extract_ramp_parameters_from_filename(file_path)
+            
             metadata = DataMetadata(
                 format_type=DataFormat.GENERIC_TIME_SERIES,
                 source_file=file_path,
@@ -273,7 +312,9 @@ class GenericTimeSeriesParser(BaseDataParser):
                 time_range=(time_vector.min(), time_vector.max()),
                 spatial_range=None,
                 variables=list(variables.keys()),
-                units={var: "unknown" for var in variables.keys()}
+                units={var: "unknown" for var in variables.keys()},
+                file_timestamp=file_timestamp,
+                ramp_parameters=ramp_parameters
             )
             
             # Create standard data package (no spatial dimension)
@@ -285,6 +326,11 @@ class GenericTimeSeriesParser(BaseDataParser):
             )
             
             print(f"  ✓ Successfully parsed {len(time_vector)} time points, {len(variables)} variables")
+            if file_timestamp:
+                print(f"  ✓ Extracted timestamp: {file_timestamp}")
+            if ramp_parameters:
+                ramp_desc = f"{ramp_parameters.get('duration', '?')}min {ramp_parameters.get('direction', '?')}-{ramp_parameters.get('curve_shape', '?')}"
+                print(f"  ✓ Extracted ramp parameters: {ramp_desc}")
             return data_package
             
         except Exception as e:
@@ -302,11 +348,6 @@ class DataLoaderManager:
             AspenDynamicsParser(),
             GenericTimeSeriesParser(),
         ]
-        self._format_stats = {}
-    
-    def add_parser(self, parser: BaseDataParser):
-        """Add a custom parser to the manager"""
-        self.parsers.append(parser)
     
     def load_data(self, file_path: str, preferred_format: Optional[DataFormat] = None) -> Optional[StandardDataPackage]:
         """Load data using the best available parser"""
@@ -319,13 +360,11 @@ class DataLoaderManager:
         # Try preferred format first
         if preferred_format:
             for parser in self.parsers:
-                if (hasattr(parser, 'format_type') and 
-                    parser.format_type == preferred_format and 
-                    parser.can_parse(file_path)):
+                if ((isinstance(parser, AspenDynamicsParser) and preferred_format == DataFormat.ASPEN_PLUS_DYNAMICS) or
+                    (isinstance(parser, GenericTimeSeriesParser) and preferred_format == DataFormat.GENERIC_TIME_SERIES)) and parser.can_parse(file_path):
                     
                     result = parser.parse(file_path)
                     if result:
-                        self._update_stats(preferred_format, True)
                         return result
         
         # Try all parsers in order
@@ -336,7 +375,6 @@ class DataLoaderManager:
                 print(f"  ✓ Format detected")
                 result = parser.parse(file_path)
                 if result:
-                    self._update_stats(result.metadata.format_type, True)
                     return result
                 else:
                     print(f"  ✗ Parsing failed")
@@ -350,9 +388,7 @@ class DataLoaderManager:
         """Detect the format of a file without parsing it"""
         for parser in self.parsers:
             if parser.can_parse(file_path):
-                if hasattr(parser, 'format_type'):
-                    return parser.format_type
-                elif isinstance(parser, AspenDynamicsParser):
+                if isinstance(parser, AspenDynamicsParser):
                     return DataFormat.ASPEN_PLUS_DYNAMICS
                 elif isinstance(parser, GenericTimeSeriesParser):
                     return DataFormat.GENERIC_TIME_SERIES
@@ -361,78 +397,5 @@ class DataLoaderManager:
     def get_supported_formats(self) -> List[str]:
         """Get list of supported format descriptions"""
         return [parser.get_format_description() for parser in self.parsers]
-    
-    def _update_stats(self, format_type: DataFormat, success: bool):
-        """Update parsing statistics"""
-        if format_type not in self._format_stats:
-            self._format_stats[format_type] = {'success': 0, 'failure': 0}
-        
-        if success:
-            self._format_stats[format_type]['success'] += 1
-        else:
-            self._format_stats[format_type]['failure'] += 1
-    
-    def print_stats(self):
-        """Print parsing statistics"""
-        if not self._format_stats:
-            print("No parsing statistics available")
-            return
-        
-        print("\n=== Data Loader Statistics ===")
-        for format_type, stats in self._format_stats.items():
-            total = stats['success'] + stats['failure']
-            success_rate = (stats['success'] / total * 100) if total > 0 else 0
-            print(f"{format_type.value}: {stats['success']}/{total} successful ({success_rate:.1f}%)")
 
-# Legacy compatibility functions
-def load_and_parse_aspen_data(file_path: str) -> Optional[Dict[str, Any]]:
-    """Legacy compatibility function for existing code"""
-    loader = DataLoaderManager()
-    data_package = loader.load_data(file_path, DataFormat.ASPEN_PLUS_DYNAMICS)
-    
-    if data_package is None:
-        return None
-    
-    # Convert to legacy format
-    return {
-        'time_vector': data_package.time_vector,
-        'length_vector': data_package.length_vector,
-        'variables': data_package.variables,
-        'file_path': file_path,
-        'dimensions': data_package.metadata.dimensions,
-        'format_type': 'aspen_csv'  # Legacy format identifier
-    }
 
-def parse_ramp_parameters_from_filename(file_path: str):
-    """Legacy compatibility function - imports from analysis_engine"""
-    from analysis_engine import RampParameters
-    
-    filename = os.path.basename(file_path).lower()
-    filename_parts = filename.replace('.csv', '').split('-')
-    
-    # Remove timestamp parts
-    clean_parts = []
-    for part in filename_parts:
-        if not (part.isdigit() and len(part) >= 4):
-            clean_parts.append(part)
-    
-    ramp_params = RampParameters()
-    
-    if len(clean_parts) >= 3:
-        try:
-            ramp_params.duration = int(clean_parts[0])
-            ramp_params.direction = clean_parts[1]
-            ramp_params.curve_shape = clean_parts[2]
-        except (ValueError, IndexError):
-            print(f"Warning: Could not parse filename format: {filename}")
-    else:
-        # Fallback detection
-        if "up" in filename:
-            ramp_params.direction = "up"
-        elif "down" in filename:
-            ramp_params.direction = "down"
-    
-    return ramp_params
-
-# Create global instance for easy access
-data_loader = DataLoaderManager()
