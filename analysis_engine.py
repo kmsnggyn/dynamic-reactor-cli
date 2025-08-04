@@ -14,13 +14,37 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Optional, Dict, List, Tuple, Any
 
+# Analysis Configuration Constants
+DEFAULT_STEADY_STATE_THRESHOLD = 0.05  # °C/min
+DEFAULT_MIN_DURATION = 10.0  # minutes
+DEFAULT_RAMP_START_TIME = 10.0  # minutes
+DEFAULT_MIN_CONTIGUOUS_LENGTH = 5  # data points
+HOT_SPOT_STABILITY_THRESHOLD = 0.1  # meters
+RAPID_CHANGE_SIGMA_MULTIPLIER = 3.0  # standard deviations
+
+# Matrix and Array Constants
+MIN_MATRIX_DIMENSIONS = 2  # Minimum dimensions for 2D temperature matrices
+MIN_ARRAY_SIZE = 0  # Minimum size for arrays
+MIN_POSITIVE_VALUE = 0  # Minimum value for positive parameters
+
 @dataclass
 class RampParameters:
-    """Data class for ramp experiment parameters"""
+    """
+    Data class for ramp experiment parameters.
+    
+    Stores all parameters related to reactor ramp experiments including timing,
+    direction, and curve shape characteristics.
+    
+    Attributes:
+        duration: Ramp duration in minutes
+        direction: Ramp direction ("up" or "down")
+        curve_shape: Curve type ("r" for linear, "s" for sinusoidal)
+        start_time: When the ramp begins (minutes from simulation start)
+    """
     duration: Optional[int] = None
     direction: Optional[str] = None  # "up" or "down"
     curve_shape: Optional[str] = None  # "r" (linear) or "s" (sinusoidal)
-    start_time: float = 10.0
+    start_time: float = DEFAULT_RAMP_START_TIME
     
     @property
     def end_time(self) -> Optional[float]:
@@ -64,7 +88,20 @@ class RampParameters:
 
 @dataclass
 class AnalysisOptions:
-    """Data class for analysis options selected by user"""
+    """
+    Data class for analysis options selected by user.
+    
+    Controls which analysis components and plots are generated during
+    the reactor analysis process.
+    
+    Attributes:
+        temperature_response: Generate temperature vs time plots
+        stability_analysis: Perform steady-state detection analysis  
+        spatial_gradients: Calculate spatial temperature gradients
+        heat_transfer_3d: Generate 3D heat transfer visualizations
+        temperature_difference: Calculate catalyst-bulk temperature differences
+        time_limit: Optional time limit for analysis (minutes)
+    """
     temperature_response: bool = True
     stability_analysis: bool = True
     spatial_gradients: bool = True
@@ -82,51 +119,37 @@ try:
     DataFormat = data_loader_module.DataFormat
     print("Using new modular data loader")
     
-    # Simple data loading wrapper
+    # Simple data loading wrapper using the imported DataLoaderManager
     class DataLoader:
-        """Clean wrapper for modern data loader"""
-        
+        """Unified DataLoader interface using modular data loader"""
         @staticmethod
-        def load_data(file_path: str) -> Optional[StandardDataPackage]:
-            """Load data using modern data loader"""
+        def load_data(file_path: str) -> Optional[Any]:
             loader = DataLoaderManager()
             return loader.load_data(file_path)
-        
+
         @staticmethod
         def parse_ramp_parameters_from_filename(file_path: str) -> RampParameters:
-            """Parse ramp parameters from filename convention"""
+            # Delegate to the imported module if available, else fallback
+            if hasattr(data_loader_module, 'parse_ramp_parameters_from_filename'):
+                return data_loader_module.parse_ramp_parameters_from_filename(file_path)
+            # Fallback: basic parsing
             filename = os.path.basename(file_path).lower()
-            filename_parts = filename.replace('.csv', '').split('-')
-            
-            # Remove timestamp parts (8+ digits)
-            clean_parts = []
-            for part in filename_parts:
-                if not (part.isdigit() and len(part) >= 8):
-                    clean_parts.append(part)
-            
             ramp_params = RampParameters()
-            
-            if len(clean_parts) >= 3:
-                try:
-                    ramp_params.duration = int(clean_parts[0])
-                    ramp_params.direction = clean_parts[1]
-                    ramp_params.curve_shape = clean_parts[2]
-                except (ValueError, IndexError):
-                    print(f"Warning: Could not parse filename format: {filename}")
-            else:
-                # Fallback detection
-                if "up" in filename:
-                    ramp_params.direction = "up"
-                elif "down" in filename:
-                    ramp_params.direction = "down"
-            
+            if "up" in filename:
+                ramp_params.direction = "up"
+            elif "down" in filename:
+                ramp_params.direction = "down"
             return ramp_params
 
 except ImportError:
     print("Warning: Could not import new data loader, using minimal fallback")
     
+    # Define minimal types for fallback
+    StandardDataPackage = Any
+    
+    # Use single DataLoader class for both cases
     class DataLoader:
-        """Minimal fallback implementation"""
+        """Minimal fallback implementation when data_loader module unavailable"""
         
         @staticmethod
         def load_data(file_path: str) -> Optional[Dict[str, Any]]:
@@ -156,15 +179,58 @@ def _import_module_safely(module_name: str):
         return None
 
 class SteadyStateDetector:
-    """Handles steady state detection logic"""
+    """
+    Handles steady state detection logic for reactor temperature data.
+    
+    Provides static methods for detecting when a reactor system reaches
+    steady-state conditions based on temperature change rates and stability criteria.
+    
+    The detection algorithm:
+    1. Calculates temperature derivatives over time
+    2. Identifies periods where change rates are below threshold
+    3. Filters out isolated stable points
+    4. Finds continuous stable periods meeting minimum duration
+    """
     
     @staticmethod
     def detect_steady_state(time_vector: np.ndarray, 
                           catalyst_temp_matrix: np.ndarray,
-                          threshold: float = 0.05,
-                          min_duration: float = 10,
+                          threshold: float = DEFAULT_STEADY_STATE_THRESHOLD,
+                          min_duration: float = DEFAULT_MIN_DURATION,
                           search_start_time: Optional[float] = None) -> Tuple[Optional[float], Dict[str, Any]]:
-        """Detect steady state conditions"""
+        """
+        Detect steady state conditions in reactor temperature data.
+        
+        Args:
+            time_vector: 1D array of time points (minutes)
+            catalyst_temp_matrix: 2D array [time, position] of catalyst temperatures (°C)
+            threshold: Maximum RMS temperature change rate for steady state (°C/min)
+            min_duration: Minimum duration for a valid steady state period (minutes)
+            search_start_time: Start searching for steady state after this time (minutes)
+            
+        Returns:
+            Tuple containing:
+            - steady_state_time: Time when steady state begins (minutes), or None if not found
+            - stability_metrics: Dictionary with stability analysis results
+            
+        Example:
+            >>> time = np.linspace(0, 100, 1000)  # 100 minutes
+            >>> temps = np.random.normal(500, 1, (1000, 10))  # Stable temperatures
+            >>> steady_time, metrics = detect_steady_state(time, temps)
+            >>> print(f"Steady state at: {steady_time:.1f} min")
+        """
+        # Input validation
+        if len(time_vector) == MIN_ARRAY_SIZE or catalyst_temp_matrix.size == MIN_ARRAY_SIZE:
+            raise ValueError("Empty time vector or temperature matrix provided")
+        
+        if len(time_vector) != catalyst_temp_matrix.shape[0]:
+            raise ValueError(f"Time vector length ({len(time_vector)}) must match temperature matrix first dimension ({catalyst_temp_matrix.shape[0]})")
+        
+        if threshold <= MIN_POSITIVE_VALUE:
+            raise ValueError(f"Threshold must be positive, got {threshold}")
+        
+        if min_duration <= MIN_POSITIVE_VALUE:
+            raise ValueError(f"Minimum duration must be positive, got {min_duration}")
         
         print(f"\n=== Steady State Detection ===")
         print(f"Parameters: threshold={threshold:.3f} °C min⁻¹, min_duration={min_duration} min")
@@ -184,8 +250,8 @@ class SteadyStateDetector:
         stable_mask = SteadyStateDetector._remove_isolated_stable_points(stable_mask)
         
         # Add initial steady state for ramp experiments
-        if search_start_time is not None and search_start_time >= 10.0:
-            initial_steady_mask = time_vector < 10.0
+        if search_start_time is not None and search_start_time >= DEFAULT_RAMP_START_TIME:
+            initial_steady_mask = time_vector < DEFAULT_RAMP_START_TIME
             stable_mask = stable_mask | initial_steady_mask
         
         # Find steady state time
@@ -220,8 +286,20 @@ class SteadyStateDetector:
         return steady_state_time, stability_metrics
     
     @staticmethod
-    def _remove_isolated_stable_points(mask: np.ndarray, min_contiguous_length: int = 5) -> np.ndarray:
-        """Remove isolated stable points, keep only contiguous stable regions"""
+    def _remove_isolated_stable_points(mask: np.ndarray, min_contiguous_length: int = DEFAULT_MIN_CONTIGUOUS_LENGTH) -> np.ndarray:
+        """
+        Remove isolated stable points, keep only contiguous stable regions.
+        
+        Filters out brief stable periods that don't meet the minimum contiguous
+        length requirement, reducing noise in steady-state detection.
+        
+        Args:
+            mask: Boolean array indicating stable points
+            min_contiguous_length: Minimum number of consecutive stable points required
+            
+        Returns:
+            Filtered boolean mask with isolated points removed
+        """
         if not np.any(mask):
             return mask
         
@@ -235,11 +313,12 @@ class SteadyStateDetector:
                 in_stable_region = True
                 region_start = i
             elif not is_stable and in_stable_region:
-                region_length = i - region_start
-                stable_regions.append((region_start, i, region_length))
+                if region_start is not None:
+                    region_length = i - region_start
+                    stable_regions.append((region_start, i, region_length))
                 in_stable_region = False
         
-        if in_stable_region:
+        if in_stable_region and region_start is not None:
             region_length = len(mask) - region_start
             stable_regions.append((region_start, len(mask), region_length))
         
@@ -300,16 +379,30 @@ class AnalysisEngine:
     3. Calculates ALL metrics (steady-state, ramp rates, etc.)
     4. Creates comprehensive data package
     5. Optionally saves complete analysis for reuse
+    
+    The engine handles various reactor configurations and provides flexible
+    analysis through configurable parameters. It integrates steady state
+    detection, spatial/temporal gradient analysis, and statistical evaluation.
+    
+    Attributes:
+        analysis_package: Dictionary containing all computed analysis results
+        detector: SteadyStateDetector instance for steady state analysis
+        config: Optional configuration dictionary for analysis parameters
+        
+    Example:
+        >>> engine = AnalysisEngine(config={'threshold': 0.05})
+        >>> results = engine.run_analysis(data_package, ramp_params, options)
+        >>> print(f"Analysis package contains {len(results)} components")
     """
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.analysis_package = {}
         self.save_intermediate_data = True  # Option to save analysis packages
         # Legacy attributes for compatibility with GUI
-        self.data_package = None
-        self.ramp_params = None
-        self.steady_state_time = None
-        self.stability_metrics = None
+        self.data_package: Optional[Dict[str, Any]] = None
+        self.ramp_params: Optional[RampParameters] = None
+        self.steady_state_time: Optional[float] = None
+        self.stability_metrics: Optional[Dict[str, Any]] = None
         
         # Store configuration for analysis parameters
         self.config = config or {
@@ -344,7 +437,10 @@ class AnalysisEngine:
             
             # Calculate ramp rate if we have duration and direction
             if self.ramp_params.duration and self.ramp_params.duration > 0:
-                metrics['Ramp_Rate'] = f"{(self.ramp_params.end_time - self.ramp_params.start_time) / self.ramp_params.duration:.3f}"
+                if self.ramp_params.end_time and self.ramp_params.start_time:
+                    metrics['Ramp_Rate'] = f"{(self.ramp_params.end_time - self.ramp_params.start_time) / self.ramp_params.duration:.3f}"
+                else:
+                    metrics['Ramp_Rate'] = f"{self.ramp_params.duration:.3f}"
             else:
                 metrics['Ramp_Rate'] = "N/A"
         
@@ -372,27 +468,42 @@ class AnalysisEngine:
                 temp_matrix = package['variables']['T_cat (°C)']
                 time_vector = package.get('time_vector')
             
+            # Ensure temp_matrix is a numpy array
             if temp_matrix is not None and time_vector is not None:
-                # Calculate basic temperature metrics
-                max_temp = np.max(temp_matrix)
-                min_temp = np.min(temp_matrix)
-                avg_temp = np.mean(temp_matrix)
-                temp_range = max_temp - min_temp
+                # Convert to numpy array if needed
+                if hasattr(temp_matrix, 'values'):
+                    temp_matrix = temp_matrix.values
+                elif not isinstance(temp_matrix, np.ndarray):
+                    try:
+                        temp_matrix = np.array(temp_matrix)
+                    except (ValueError, TypeError):
+                        # Skip if conversion fails
+                        temp_matrix = None
                 
-                metrics['Max_Temperature'] = f"{max_temp:.2f}"
-                metrics['Min_Temperature'] = f"{min_temp:.2f}"
-                metrics['Avg_Temperature'] = f"{avg_temp:.2f}"
-                metrics['Temperature_Range'] = f"{temp_range:.2f}"
-                
-                # Find position of maximum temperature
-                max_pos = np.unravel_index(np.argmax(temp_matrix), temp_matrix.shape)
-                if len(package.get('length_vector', [])) > max_pos[1]:
-                    max_temp_position = package['length_vector'][max_pos[1]]
-                    metrics['Max_Temp_Position'] = f"{max_temp_position:.3f}"
-                
-                # Calculate final temperature (last time point, reactor exit)
-                final_temp = temp_matrix[-1, -1]
-                metrics['Final_Temperature'] = f"{final_temp:.2f}"
+                # Only proceed if we have a valid numpy array
+                if temp_matrix is not None and isinstance(temp_matrix, np.ndarray) and temp_matrix.size > 0:
+                    # Calculate basic temperature metrics
+                    max_temp = np.max(temp_matrix)
+                    min_temp = np.min(temp_matrix)
+                    avg_temp = np.mean(temp_matrix)
+                    temp_range = max_temp - min_temp
+                    
+                    metrics['Max_Temperature'] = f"{max_temp:.2f}"
+                    metrics['Min_Temperature'] = f"{min_temp:.2f}"
+                    metrics['Avg_Temperature'] = f"{avg_temp:.2f}"
+                    metrics['Temperature_Range'] = f"{temp_range:.2f}"
+                    
+                    # Find position of maximum temperature
+                    if temp_matrix.ndim >= MIN_MATRIX_DIMENSIONS:
+                        max_pos = np.unravel_index(np.argmax(temp_matrix), temp_matrix.shape)
+                        if len(package.get('length_vector', [])) > max_pos[1]:
+                            max_temp_position = package['length_vector'][max_pos[1]]
+                            metrics['Max_Temp_Position'] = f"{max_temp_position:.3f}"
+                    
+                    # Calculate final temperature (last time point, reactor exit)
+                    if temp_matrix.ndim >= MIN_MATRIX_DIMENSIONS and temp_matrix.shape[0] > MIN_ARRAY_SIZE and temp_matrix.shape[1] > MIN_ARRAY_SIZE:
+                        final_temp = temp_matrix[-1, -1]
+                        metrics['Final_Temperature'] = f"{final_temp:.2f}"
         
         # Add units for metrics
         units = {
@@ -435,34 +546,73 @@ class AnalysisEngine:
         
         # Step 1: Load raw data using modern data loader
         print("Step 1: Loading raw data...")
-        data_package = DataLoader.load_data(file_path)
-        if data_package is None:
+        data_package_raw = DataLoader.load_data(file_path)
+        if data_package_raw is None:
             raise ValueError("Failed to load data from file")
         
+        # Handle both StandardDataPackage and dict types safely
+        data_package = data_package_raw  # Use Any type to avoid type checking issues
+        
         # Extract ramp parameters from metadata (preferred) or filename (fallback)
-        if data_package.metadata.ramp_parameters:
-            ramp_params = RampParameters(
-                duration=data_package.metadata.ramp_parameters.get('duration'),
-                direction=data_package.metadata.ramp_parameters.get('direction'),
-                curve_shape=data_package.metadata.ramp_parameters.get('curve_shape'),
-                start_time=data_package.metadata.ramp_parameters.get('start_time', 10.0)
-            )
-            print(f"✓ Ramp parameters from metadata: {ramp_params.duration}min {ramp_params.direction}-{ramp_params.curve_shape}")
-        else:
+        try:
+            # Try accessing as StandardDataPackage first
+            metadata = getattr(data_package, 'metadata', None)
+            if metadata and hasattr(metadata, 'ramp_parameters') and metadata.ramp_parameters:
+                ramp_params = RampParameters(
+                    duration=metadata.ramp_parameters.get('duration'),
+                    direction=metadata.ramp_parameters.get('direction'),
+                    curve_shape=metadata.ramp_parameters.get('curve_shape'),
+                    start_time=metadata.ramp_parameters.get('start_time', 10.0)
+                )
+                print(f"✓ Ramp parameters from metadata: {ramp_params.duration}min {ramp_params.direction}-{ramp_params.curve_shape}")
+            else:
+                ramp_params = DataLoader.parse_ramp_parameters_from_filename(file_path)
+                print("⚠ Using fallback ramp parameter parsing")
+        except (AttributeError, TypeError):
             ramp_params = DataLoader.parse_ramp_parameters_from_filename(file_path)
-            print("⚠ Using fallback ramp parameter parsing")
+            print("⚠ Using fallback ramp parameter parsing (error)")
         
-        print(f"✓ Raw data loaded: {data_package.n_time} time points, {data_package.n_spatial} positions")
+        # Get data dimensions
+        try:
+            n_time = getattr(data_package, 'n_time', None)
+            n_spatial = getattr(data_package, 'n_spatial', None)
+            if n_time and n_spatial:
+                print(f"✓ Raw data loaded: {n_time} time points, {n_spatial} positions")
+            else:
+                print("✓ Raw data loaded")
+        except (AttributeError, TypeError):
+            print("✓ Raw data loaded")
         
-        # Convert StandardDataPackage to legacy format for compatibility with existing analysis methods
-        raw_data = {
-            'time_vector': data_package.time_vector,
-            'length_vector': data_package.length_vector,
-            'variables': data_package.variables,
-            'file_path': file_path,
-            'dimensions': data_package.metadata.dimensions,
-            'format_type': data_package.metadata.format_type.value if hasattr(data_package.metadata.format_type, 'value') else str(data_package.metadata.format_type)
-        }
+        # Convert to legacy format for compatibility with existing analysis methods
+        try:
+            # Try accessing as StandardDataPackage first
+            time_vector = getattr(data_package, 'time_vector', None)
+            if time_vector is not None:
+                # It's a StandardDataPackage
+                raw_data = {
+                    'time_vector': time_vector,
+                    'length_vector': getattr(data_package, 'length_vector', []),
+                    'variables': getattr(data_package, 'variables', {}),
+                    'file_path': file_path,
+                    'dimensions': getattr(getattr(data_package, 'metadata', None), 'dimensions', {}),
+                    'format_type': 'StandardDataPackage'
+                }
+                # Try to get format type safely
+                metadata = getattr(data_package, 'metadata', None)
+                if metadata:
+                    format_type = getattr(metadata, 'format_type', None)
+                    if format_type:
+                        if hasattr(format_type, 'value'):
+                            raw_data['format_type'] = format_type.value
+                        else:
+                            raw_data['format_type'] = str(format_type)
+            else:
+                # It's already a dictionary
+                raw_data = data_package if isinstance(data_package, dict) else {}
+        except (AttributeError, TypeError) as e:
+            print(f"Warning: Error accessing data package attributes: {e}")
+            # Fallback to treating as dictionary
+            raw_data = data_package if isinstance(data_package, dict) else {}
         
         # Step 2: Process core variables
         print("\nStep 2: Processing core variables...")
@@ -624,18 +774,19 @@ class AnalysisEngine:
         
         derived = package['derived_variables']
         
+        # Convert vectors to numpy arrays if they're pandas Series
+        time_array = time_vector.values if hasattr(time_vector, 'values') else time_vector
+        length_array = length_vector.values if hasattr(length_vector, 'values') else length_vector
+        
+        # Calculate spacing for gradients
+        dt = time_array[1] - time_array[0] if len(time_array) > 1 else 0.05
+        dx = length_array[1] - length_array[0] if len(length_array) > 1 else 0.1
+        
         # Temperature gradients
         if 'T_cat (°C)' in core_matrices:
             catalyst_temp = core_matrices['T_cat (°C)']
             
-            # Convert vectors to numpy arrays if they're pandas Series
-            time_array = time_vector.values if hasattr(time_vector, 'values') else time_vector
-            length_array = length_vector.values if hasattr(length_vector, 'values') else length_vector
-            
             # Spatial gradients (∂T/∂x)
-            dt = time_array[1] - time_array[0] if len(time_array) > 1 else 0.05
-            dx = length_array[1] - length_array[0] if len(length_array) > 1 else 0.1
-            
             spatial_gradients = np.gradient(catalyst_temp, dx, axis=1)
             temporal_gradients = np.gradient(catalyst_temp, dt, axis=0)
             
@@ -950,7 +1101,32 @@ class AnalysisEngine:
 
 
 class DynamicRampAnalyzer:
-    """Main analyzer class that coordinates all analysis components"""
+    """
+    Main analyzer class that coordinates all analysis components for reactor ramp tests.
+    
+    This class serves as the primary interface for conducting comprehensive dynamic
+    ramp analysis of reactor systems. It coordinates data loading, analysis execution,
+    and results management while handling configuration and plotting setup.
+    
+    The analyzer integrates multiple components:
+    - AnalysisEngine for core computational analysis
+    - ConfigManager for matplotlib and analysis settings
+    - Results management for output organization
+    - Error handling and recovery mechanisms
+    
+    Attributes:
+        config: Dictionary containing analysis and plotting configuration
+        analysis_engine: AnalysisEngine instance for data processing
+        
+    Example:
+        >>> analyzer = DynamicRampAnalyzer()
+        >>> analyzer.run_analysis('reactor_data.csv', options)
+        >>> # Results automatically saved with timestamp
+        
+    Note:
+        This class handles missing dependencies gracefully and provides
+        default configurations when external modules are unavailable.
+    """
     
     def __init__(self):
         # Update matplotlib settings if ConfigManager is available
@@ -1080,7 +1256,32 @@ class DynamicRampAnalyzer:
             return False
     
     def run_analysis(self, file_path: str, options) -> bool:
-        """Run complete analysis with plotting (for non-GUI usage)"""
+        """
+        Run complete analysis workflow with automated plotting.
+        
+        This method executes the full analysis pipeline including data processing,
+        steady state detection, gradient analysis, and automatic plot generation.
+        Designed for standalone script usage where GUI is not available.
+        
+        Args:
+            file_path: Absolute path to the CSV data file to analyze
+            options: AnalysisOptions object containing analysis configuration
+            
+        Returns:
+            bool: True if analysis and plotting completed successfully, False otherwise
+            
+        Side Effects:
+            - Creates analysis package accessible via self.processed_data
+            - Generates and saves plots to timestamped directory
+            - Prints progress and results to console
+            
+        Example:
+            >>> engine = AnalysisEngine()
+            >>> options = AnalysisOptions(temperature_threshold=0.05)
+            >>> success = engine.run_analysis('data/reactor_test.csv', options)
+            >>> if success:
+            ...     print("Analysis and plots completed successfully")
+        """
         success = self.run_data_processing_only(file_path, options)
         if not success:
             return False

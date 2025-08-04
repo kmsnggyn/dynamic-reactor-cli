@@ -17,23 +17,53 @@ from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass
 from enum import Enum
 
+# Data Loading Configuration Constants
+MIN_NUMERIC_COLUMN_RATIO = 0.8  # Minimum ratio of numeric values to consider a column valid
+ASPEN_ROW_BLOCK_SIZE = 6  # Number of rows per time block in Aspen Dynamics format
+DEFAULT_RAMP_START_TIME = 10.0  # Default ramp start time in minutes
+MIN_DIGIT_COUNT_TIMESTAMP = 8  # Minimum digits for timestamp detection
+TIMESTAMP_PATTERN = r'(\d{8}-\d{6})'  # Pattern for YYYYMMDD-HHMMSS format
+
 def extract_timestamp_from_filename(file_path: str) -> Optional[str]:
-    """Extract timestamp from filename in format YYYYMMDD-HHMMSS"""
+    """
+    Extract timestamp from filename in format YYYYMMDD-HHMMSS.
+    
+    Args:
+        file_path: Path to the file with timestamp in filename
+        
+    Returns:
+        Extracted timestamp string or None if not found
+        
+    Example:
+        >>> extract_timestamp_from_filename('data_20250804-143022.csv')
+        '20250804-143022'
+    """
     filename = os.path.basename(file_path)
     # Look for pattern: 8 digits, hyphen, 6 digits (YYYYMMDD-HHMMSS)
-    timestamp_pattern = r'(\d{8}-\d{6})'
-    match = re.search(timestamp_pattern, filename)
+    match = re.search(TIMESTAMP_PATTERN, filename)
     return match.group(1) if match else None
 
 def extract_ramp_parameters_from_filename(file_path: str) -> Optional[Dict[str, Any]]:
-    """Extract ramp parameters from filename in format: duration-direction-curve_shape"""
+    """
+    Extract ramp parameters from filename in format: duration-direction-curve_shape.
+    
+    Args:
+        file_path: Path to the file with ramp parameters in filename
+        
+    Returns:
+        Dictionary with extracted parameters or None if parsing fails
+        
+    Example:
+        >>> extract_ramp_parameters_from_filename('36-down-s-20250804-143022.csv')
+        {'duration': 36, 'direction': 'down', 'curve_shape': 's', 'start_time': 10.0, 'end_time': 46.0}
+    """
     filename = os.path.basename(file_path).lower()
     filename_parts = filename.replace('.csv', '').split('-')
     
     # Remove timestamp parts (8+ digits)
     clean_parts = []
     for part in filename_parts:
-        if not (part.isdigit() and len(part) >= 8):
+        if not (part.isdigit() and len(part) >= MIN_DIGIT_COUNT_TIMESTAMP):
             clean_parts.append(part)
     
     if len(clean_parts) >= 3:
@@ -46,8 +76,8 @@ def extract_ramp_parameters_from_filename(file_path: str) -> Optional[Dict[str, 
                 'duration': duration,
                 'direction': direction,
                 'curve_shape': curve_shape,
-                'start_time': 10.0,  # Default start time
-                'end_time': 10.0 + duration
+                'start_time': DEFAULT_RAMP_START_TIME,  # Default start time
+                'end_time': DEFAULT_RAMP_START_TIME + duration
             }
         except (ValueError, IndexError):
             pass
@@ -62,27 +92,89 @@ def extract_ramp_parameters_from_filename(file_path: str) -> Optional[Dict[str, 
     return ramp_info if ramp_info else None
 
 class DataFormat(Enum):
-    """Supported data formats"""
+    """
+    Enumeration of supported data formats.
+    
+    Defines the different CSV formats that can be parsed by the data loader.
+    Each format has its own specialized parser that can handle the specific
+    structure and conventions of that format.
+    """
     ASPEN_PLUS_DYNAMICS = "aspen_dynamics"
     GENERIC_TIME_SERIES = "generic_timeseries"
 
 @dataclass
 class DataMetadata:
-    """Metadata about the loaded data"""
+    """
+    Metadata container for loaded data with comprehensive information.
+    
+    Stores all relevant metadata about the loaded dataset including format details,
+    dimensions, ranges, and extracted parameters. This metadata is essential for
+    proper analysis and visualization of the reactor data.
+    
+    Attributes:
+        format_type: The detected/used data format
+        source_file: Full path to the original data file
+        dimensions: Dictionary containing data dimensions (n_time, m_length, etc.)
+        time_range: Tuple of (min_time, max_time) in minutes
+        spatial_range: Tuple of (min_position, max_position) in meters, or None
+        variables: List of variable names found in the data
+        units: Dictionary mapping variable names to their units
+        parsing_notes: List of warnings or issues encountered during parsing
+        file_timestamp: Timestamp extracted from filename (YYYYMMDD-HHMMSS format)
+        ramp_parameters: Dictionary with extracted ramp experiment parameters
+        
+    Example:
+        >>> metadata = DataMetadata(
+        ...     format_type=DataFormat.ASPEN_PLUS_DYNAMICS,
+        ...     source_file="reactor_data.csv",
+        ...     dimensions={'n_time': 1000, 'm_length': 50},
+        ...     time_range=(0.0, 100.0)
+        ... )
+    """
     format_type: DataFormat
     source_file: str
     dimensions: Dict[str, int]
     time_range: Tuple[float, float]
     spatial_range: Optional[Tuple[float, float]] = None
-    variables: List[str] = None
-    units: Dict[str, str] = None
-    parsing_notes: List[str] = None
+    variables: Optional[List[str]] = None
+    units: Optional[Dict[str, str]] = None
+    parsing_notes: Optional[List[str]] = None
     file_timestamp: Optional[str] = None  # Extracted from filename (YYYYMMDD-HHMMSS)
     ramp_parameters: Optional[Dict[str, Any]] = None  # Extracted ramp experiment parameters
 
 @dataclass
 class StandardDataPackage:
-    """Standardized data structure for all formats"""
+    """
+    Standardized data structure for all supported formats.
+    
+    This class provides a unified interface for reactor data regardless of the
+    original file format. All parsers convert their specific formats into this
+    standard structure, enabling consistent analysis across different data sources.
+    
+    The structure supports both spatial (1D reactor) and non-spatial (lumped) data.
+    For spatial data, variables are 2D matrices [time, position]. For non-spatial
+    data, variables are 2D matrices [time, 1] for consistency.
+    
+    Attributes:
+        time_vector: 1D array of time points in minutes
+        length_vector: 1D array of spatial positions in meters (None for non-spatial)
+        variables: Dictionary mapping variable names to their data matrices
+        metadata: Complete metadata about the data source and parsing
+        
+    Properties:
+        is_spatial: True if data has spatial dimension
+        n_time: Number of time points
+        n_spatial: Number of spatial points (0 for non-spatial)
+        
+    Example:
+        >>> package = StandardDataPackage(
+        ...     time_vector=np.linspace(0, 100, 1000),
+        ...     length_vector=np.linspace(0, 1, 50),
+        ...     variables={'T_cat (°C)': np.random.normal(500, 10, (1000, 50))},
+        ...     metadata=metadata
+        ... )
+        >>> print(f"Data: {package.n_time} times × {package.n_spatial} positions")
+    """
     time_vector: np.ndarray
     length_vector: Optional[np.ndarray]  # None for non-spatial data
     variables: Dict[str, np.ndarray]  # Variable name -> data matrix
@@ -104,7 +196,26 @@ class StandardDataPackage:
         return len(self.length_vector) if self.length_vector is not None else 0
 
 class AspenDynamicsParser:
-    """Parser for Aspen Plus Dynamics CSV files"""
+    """
+    Parser for Aspen Plus Dynamics CSV export files.
+    
+    This parser handles the specific format generated by Aspen Plus Dynamics
+    when exporting spatial reactor data. The format consists of:
+    - Header row with "Time" in first column
+    - Units row (may be "Minutes" or empty)
+    - Position values in third row
+    - Data blocks of 6 rows: time + 5 variables at each time point
+    
+    Supported variables in order:
+    1. Catalyst Temperature (°C)
+    2. Gas Temperature (°C)
+    3. Reaction Rate (kmol/m³/hr)
+    4. Heat Transfer to Catalyst (GJ/m³/hr)
+    5. Heat Transfer with Coolant (kW/m²)
+    
+    The parser automatically detects the format and extracts both temporal
+    and spatial data into standardized matrices.
+    """
     
     def can_parse(self, file_path: str) -> bool:
         """Check if file matches Aspen Dynamics format"""
@@ -113,17 +224,17 @@ class AspenDynamicsParser:
             df = pd.read_csv(file_path, header=None, nrows=10)
             
             # Check structure indicators
-            has_time_header = df.iloc[0, 0] and str(df.iloc[0, 0]).strip().lower() == "time"
+            has_time_header = bool(df.iloc[0, 0] and str(df.iloc[0, 0]).strip().lower() == "time")
             
             # Row 2 can either be "Minutes" or empty/nan (newer Aspen exports)
             if pd.isna(df.iloc[1, 0]):
                 row2_val = ""  # Treat NaN as empty
             else:
                 row2_val = str(df.iloc[1, 0]).strip().lower()
-            has_minutes_header = row2_val in ["minutes", ""]
+            has_minutes_header = bool(row2_val in ["minutes", ""])
             
             # Check if row 3 has spatial positions starting from column 2
-            has_position_row = pd.to_numeric(df.iloc[2, 1:], errors='coerce').notna().any()
+            has_position_row = bool(pd.to_numeric(df.iloc[2, 1:], errors='coerce').notna().any())
             
             return has_time_header and has_minutes_header and has_position_row
             
@@ -144,8 +255,8 @@ class AspenDynamicsParser:
             
             # Extract length vector from row 3 (index 2)
             position_row = df.iloc[2]
-            length_vector = pd.to_numeric(position_row[1:], errors='coerce')
-            length_vector = length_vector[~np.isnan(length_vector)]
+            length_series = pd.to_numeric(position_row[1:], errors='coerce')
+            length_vector = np.array(length_series[~np.isnan(length_series)])  # Convert to numpy array
             
             print(f"  Length vector: {len(length_vector)} positions from {length_vector.min():.3f} to {length_vector.max():.3f} m")
             
@@ -153,7 +264,7 @@ class AspenDynamicsParser:
             time_values = []
             time_row_indices = []
             
-            for i in range(2, len(df), 6):
+            for i in range(2, len(df), ASPEN_ROW_BLOCK_SIZE):
                 if i < len(df):
                     time_val = pd.to_numeric(df.iloc[i, 0], errors='coerce')
                     if not np.isnan(time_val):
@@ -191,7 +302,7 @@ class AspenDynamicsParser:
                     
                     if data_row_idx < len(df):
                         row_data = df.iloc[data_row_idx, 1:1+m_length].values
-                        row_data = pd.to_numeric(row_data, errors='coerce')
+                        row_data = pd.to_numeric(pd.Series(row_data), errors='coerce').values
                         variables[expected_variables[var_idx]][t_idx, :] = row_data
                     else:
                         parsing_issues.append(f"Missing data row at time index {t_idx}, variable {expected_variables[var_idx]}")
@@ -259,7 +370,7 @@ class GenericTimeSeriesParser:
             
             # Check if it has time-like first column and numeric data
             first_col = df.iloc[:, 0]
-            has_time_col = (
+            has_time_col = bool(
                 'time' in df.columns[0].lower() or
                 pd.to_numeric(first_col, errors='coerce').notna().all()
             )
@@ -267,7 +378,7 @@ class GenericTimeSeriesParser:
             # Check if other columns are mostly numeric
             numeric_cols = 0
             for col in df.columns[1:]:
-                if pd.to_numeric(df[col], errors='coerce').notna().mean() > 0.8:
+                if pd.to_numeric(df[col], errors='coerce').notna().mean() > MIN_NUMERIC_COLUMN_RATIO:
                     numeric_cols += 1
             
             return has_time_col and numeric_cols >= 1
@@ -288,13 +399,14 @@ class GenericTimeSeriesParser:
             print(f"  Raw data shape: {df.shape}")
             
             # Extract time vector (first column)
-            time_vector = pd.to_numeric(df.iloc[:, 0], errors='coerce').values
-            time_vector = time_vector[~np.isnan(time_vector)]
+            time_series = pd.to_numeric(df.iloc[:, 0], errors='coerce')
+            time_vector = np.array(time_series[~np.isnan(time_series)])
             
             # Extract variables (remaining columns)
             variables = {}
             for col in df.columns[1:]:
-                data = pd.to_numeric(df[col], errors='coerce').values[:len(time_vector)]
+                data_series = pd.to_numeric(df[col], errors='coerce')
+                data = np.array(data_series.values[:len(time_vector)])
                 if not np.isnan(data).all():  # Skip completely empty columns
                     variables[col] = data.reshape(-1, 1)  # Make it 2D for consistency
             

@@ -12,14 +12,93 @@ Date: August 2025
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.figure
 from mpl_toolkits.mplot3d import Axes3D
-import seaborn as sns
 from matplotlib.patches import Patch
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Union
 from analysis_engine import RampParameters
 
+# Type alias for cleaner code
+Figure = matplotlib.figure.Figure
+
+# Optional seaborn import
+try:
+    import seaborn as sns
+    HAS_SEABORN = True
+except ImportError:
+    HAS_SEABORN = False
+
+# Plot Configuration Constants
+DEFAULT_TIME_LIMIT_FOR_DISPLAY = 60.0  # minutes
+DEFAULT_PLOT_DPI = 100  # dots per inch
+DEFAULT_FIGSIZE_LARGE = (20, 12)  # inches
+DEFAULT_FIGSIZE_MEDIUM = (16, 12)  # inches
+DEFAULT_FIGSIZE_SMALL = (12, 8)  # inches
+DEFAULT_LINEWIDTH = 2.5  # line width for plots
+DEFAULT_ALPHA_OVERLAY = 0.2  # transparency for overlays
+DEFAULT_ALPHA_LEGEND = 0.9  # transparency for legends
+DEFAULT_GRID_ALPHA = 0.3  # transparency for grid lines
+MAX_MARKERS_DISPLAY = 20  # maximum markers to show on line plots
+
+def safe_tight_layout(rect=None) -> None:
+    """
+    Apply tight_layout safely, handling warnings gracefully.
+    
+    Args:
+        rect: The rectangle area to adjust for (left, bottom, right, top)
+    """
+    try:
+        if rect is not None:
+            plt.tight_layout(rect=rect)
+        else:
+            plt.tight_layout()
+    except (Warning, UserWarning):
+        # If tight_layout fails, apply basic adjustments
+        if rect is not None:
+            plt.subplots_adjust(bottom=rect[1], top=rect[3])
+        else:
+            plt.subplots_adjust(top=0.95, bottom=0.05)
+
 class PlotGenerator:
-    """Handles all plot generation functionality"""
+    """
+    Handles all plot generation functionality for dynamic reactor analysis.
+    
+    This class provides static methods for creating various types of plots
+    and visualizations for reactor ramp test analysis. All methods are
+    designed to be independent and reusable across different analysis workflows.
+    
+    Features:
+    - Temperature response analysis plots
+    - Stability analysis visualizations  
+    - Spatial gradient analysis
+    - 3D heat transfer visualization
+    - Temperature difference analysis
+    
+    All plot methods return matplotlib Figure objects that can be displayed
+    or saved independently.
+    """
+    
+    @staticmethod
+    def _set_window_title_safe(fig: matplotlib.figure.Figure, title: str) -> None:
+        """Safely set window title, handling cases where it's not available."""
+        try:
+            if fig.canvas.manager is not None:
+                fig.canvas.manager.set_window_title(title)
+        except (AttributeError, TypeError):
+            pass  # Window title setting not available
+    
+    @staticmethod
+    def _safe_axvspan(ax, start_time: Optional[float], end_time: Optional[float], **kwargs) -> None:
+        """Safely add axvspan, handling None values."""
+        if start_time is not None and end_time is not None:
+            ax.axvspan(start_time, end_time, **kwargs)
+    
+    @staticmethod
+    def _safe_ramp_duration_check(ramp_params: RampParameters) -> bool:
+        """Check if ramp parameters have valid duration."""
+        return (hasattr(ramp_params, 'duration') and ramp_params.duration is not None and 
+                hasattr(ramp_params, 'start_time') and ramp_params.start_time is not None and
+                hasattr(ramp_params, 'end_time') and ramp_params.end_time is not None)
     
     @staticmethod
     def create_temperature_response_plots(time_vector: np.ndarray,
@@ -28,7 +107,7 @@ class PlotGenerator:
                                         ramp_params: RampParameters,
                                         steady_state_time: Optional[float],
                                         file_path: str,
-                                        time_limit: Optional[float] = None) -> plt.Figure:
+                                        time_limit: Optional[float] = None) -> Figure:
         """Create main temperature response analysis plots with vertical layout"""
         
         # Filter data
@@ -41,8 +120,8 @@ class PlotGenerator:
         
         # Apply plot time limit - cut where data ends
         plot_time_limit = time_limit
-        if steady_state_time is not None and steady_state_time <= 60.0:
-            plot_time_limit = min(60.0, time_limit)
+        if steady_state_time is not None and steady_state_time <= DEFAULT_TIME_LIMIT_FOR_DISPLAY:
+            plot_time_limit = min(DEFAULT_TIME_LIMIT_FOR_DISPLAY, time_limit if time_limit is not None else DEFAULT_TIME_LIMIT_FOR_DISPLAY)
         
         plot_time_mask = time_filtered <= plot_time_limit
         time_plot = time_filtered[plot_time_mask]
@@ -82,7 +161,13 @@ class PlotGenerator:
         
         # Create vertical layout plots
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10))
-        fig.canvas.manager.set_window_title(f"Temperature Response Analysis - {os.path.basename(file_path)}")
+        
+        # Set window title safely (might not be available in all environments)
+        try:
+            if fig.canvas.manager is not None:
+                fig.canvas.manager.set_window_title(f"Temperature Response Analysis - {os.path.basename(file_path)}")
+        except (AttributeError, TypeError):
+            pass  # Window title setting not available
         
         # Create consolidated info banner at the top
         direction = "up" if ramp_params.is_ramp_up else "down"
@@ -160,7 +245,7 @@ class PlotGenerator:
         ax2.grid(True, alpha=0.3)
         ax2.legend(loc='lower left', fontsize=10, framealpha=0.9)
         
-        plt.tight_layout()
+        safe_tight_layout()
         plt.subplots_adjust(top=0.85)  # Make more room for the info banner
         return fig
     
@@ -170,7 +255,7 @@ class PlotGenerator:
                                       ramp_params: RampParameters,
                                       steady_state_time: Optional[float],
                                       file_path: str,
-                                      time_limit: Optional[float] = None) -> plt.Figure:
+                                      time_limit: Optional[float] = None) -> Figure:
         """Create stability analysis plots"""
         
         # Filter data for plotting
@@ -178,8 +263,8 @@ class PlotGenerator:
             time_limit = time_vector.max()
             
         plot_time_limit = time_limit
-        if steady_state_time is not None and steady_state_time <= 60.0:
-            plot_time_limit = min(60.0, time_limit)
+        if steady_state_time is not None and steady_state_time <= DEFAULT_TIME_LIMIT_FOR_DISPLAY:
+            plot_time_limit = min(DEFAULT_TIME_LIMIT_FOR_DISPLAY, time_limit if time_limit is not None else DEFAULT_TIME_LIMIT_FOR_DISPLAY)
         
         plot_stability_mask = time_vector <= plot_time_limit
         time_stability_plot = time_vector[plot_stability_mask]
@@ -189,7 +274,13 @@ class PlotGenerator:
         
         # Create figure
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
-        fig.canvas.manager.set_window_title(f"Stability Analysis - {os.path.basename(file_path)}")
+        
+        # Set window title safely
+        try:
+            if fig.canvas.manager is not None:
+                fig.canvas.manager.set_window_title(f"Stability Analysis - {os.path.basename(file_path)}")
+        except (AttributeError, TypeError):
+            pass  # Window title setting not available
         
         # Plot 1: RMS and Max change rates
         ax1.plot(time_stability_plot, rms_plot, 'b-', linewidth=2, 
@@ -262,7 +353,7 @@ class PlotGenerator:
         ax2.set_yticklabels(['Unstable', 'Stable'])
         ax2.grid(True, alpha=0.3)
         
-        plt.tight_layout()
+        safe_tight_layout()
         return fig
     
     @staticmethod
@@ -544,7 +635,13 @@ class PlotGenerator:
                 ax6.text(bar.get_x() + bar.get_width()/2., height,
                         f'{value:.2f}', ha='center', va='bottom', fontsize=10)
         
-        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        # Try tight_layout and handle warnings gracefully
+        try:
+            safe_tight_layout(rect=[0, 0.03, 1, 0.95])
+        except Warning:
+            # If tight_layout fails, just adjust manually
+            plt.subplots_adjust(top=0.95, bottom=0.05)
+        
         return fig
     
     @staticmethod
@@ -628,7 +725,7 @@ class PlotGenerator:
         # Set viewing angle for better visualization
         ax.view_init(elev=20, azim=45)
         
-        plt.tight_layout()
+        safe_tight_layout()
         return fig
     
     @staticmethod

@@ -22,6 +22,7 @@ from typing import Optional, Dict, List, Tuple, Any
 # Third-party imports
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.figure
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
@@ -130,44 +131,44 @@ class AnalysisGUI:
         
         # File selection section
         file_frame = ttk.LabelFrame(self.main_frame, text="Data File Selection", padding="10")
-        file_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        file_frame.grid(row=1, column=0, columnspan=2, sticky="we", pady=(0, 10))
         
         ttk.Button(file_frame, text="Select Aspen CSV File", 
-                  command=self.select_file).grid(row=0, column=0, sticky=tk.W)
+                  command=self.select_file).grid(row=0, column=0, sticky="w")
         
         self.file_label = ttk.Label(file_frame, textvariable=self.selected_file, 
                                    foreground="blue", font=('Arial', 9))
-        self.file_label.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(5, 0))
+        self.file_label.grid(row=1, column=0, sticky="we", pady=(5, 0))
         
         # Analysis options section
         options_frame = ttk.LabelFrame(self.main_frame, text="Analysis Options", padding="10")
-        options_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        options_frame.grid(row=2, column=0, columnspan=2, sticky="we", pady=(0, 10))
         
         # Time limit
-        ttk.Label(options_frame, text="Time Limit (min):").grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(options_frame, text="Time Limit (min):").grid(row=0, column=0, sticky="w")
         time_entry = ttk.Entry(options_frame, textvariable=self.time_limit_var, width=10)
-        time_entry.grid(row=0, column=1, sticky=tk.W, padx=(5, 0))
+        time_entry.grid(row=0, column=1, sticky="w", padx=(5, 0))
         ttk.Label(options_frame, text="(leave empty for full range)", 
-                 font=('Arial', 8)).grid(row=0, column=2, sticky=tk.W, padx=(5, 0))
+                 font=('Arial', 8)).grid(row=0, column=2, sticky="w", padx=(5, 0))
         
         # Save results option
         ttk.Checkbutton(options_frame, text="Save analysis results to files", 
                        variable=self.save_results_var).grid(row=1, column=0, columnspan=3, 
-                                                           sticky=tk.W, pady=(10, 0))
+                                                           sticky="w", pady=(10, 0))
         
         # Info about automatic comparison file
         info_label = ttk.Label(options_frame, 
                               text="Note: Key results are automatically saved to 'Ramp_Analysis_Results_Comparison.csv'",
                               font=('Arial', 8), foreground='gray')
-        info_label.grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=(5, 0))
+        info_label.grid(row=2, column=0, columnspan=3, sticky="w", pady=(5, 0))
         
         # Plot selection section
         plots_frame = ttk.LabelFrame(self.main_frame, text="Select Plots to Generate", padding="10")
-        plots_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        plots_frame.grid(row=3, column=0, columnspan=2, sticky="we", pady=(0, 10))
 
         # Select all/none buttons
         button_frame = ttk.Frame(plots_frame)
-        button_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        button_frame.grid(row=0, column=0, columnspan=2, sticky="we", pady=(0, 10))
 
         ttk.Button(button_frame, text="Select All", 
                   command=self.select_all_plots).pack(side=tk.LEFT, padx=(0, 5))
@@ -184,7 +185,7 @@ class AnalysisGUI:
                 plots_frame,
                 text=plot_info['label'],
                 variable=self.plot_vars[plot_id]
-            ).grid(row=row, column=0, sticky=tk.W, pady=2)
+            ).grid(row=row, column=0, sticky="w", pady=2)
             row += 1
         
         # Control buttons
@@ -204,7 +205,7 @@ class AnalysisGUI:
         
         # View panels buttons - moved to bottom right in separate rows
         view_frame = ttk.Frame(self.main_frame)
-        view_frame.grid(row=8, column=1, pady=(10, 0), sticky=(tk.E, tk.S))
+        view_frame.grid(row=8, column=1, pady=(10, 0), sticky="es")
         
         # Terminal panel toggle
         self.terminal_toggle_button = ttk.Button(view_frame, text="Terminal Output ▶", width=18,
@@ -218,7 +219,7 @@ class AnalysisGUI:
         
         # Progress bar
         self.progress = ttk.Progressbar(self.main_frame, mode='indeterminate')
-        self.progress.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(10, 0))
+        self.progress.grid(row=6, column=0, columnspan=2, sticky="we", pady=(10, 0))
         
         # Status label
         self.status_label = ttk.Label(self.main_frame, text="Ready. Please select a file to begin.")
@@ -356,9 +357,9 @@ class AnalysisGUI:
         self.comparison_tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
         
         # Pack the treeview and scrollbars using grid for better control
-        self.comparison_tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        v_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
-        h_scrollbar.grid(row=1, column=0, sticky=(tk.W, tk.E))
+        self.comparison_tree.grid(row=0, column=0, sticky="news")
+        v_scrollbar.grid(row=0, column=1, sticky="ns")
+        h_scrollbar.grid(row=1, column=0, sticky="we")
         
         # Configure grid weights to make table resizable
         table_frame.grid_rowconfigure(0, weight=1)
@@ -1209,10 +1210,25 @@ class AnalysisGUI:
                 try:
                     # Try to convert to float
                     val = metric_row[col]
-                    if pd.isna(val) or val in ['N/A', '', '-']:
+                    # Handle pandas scalar values
+                    if hasattr(val, 'item'):
+                        val = val.item()
+                    
+                    # Check for missing or invalid values
+                    try:
+                        is_missing = pd.isna(val)
+                        if hasattr(is_missing, 'any'):
+                            is_missing = bool(is_missing.any())
+                        else:
+                            is_missing = bool(is_missing)
+                    except (TypeError, AttributeError):
+                        is_missing = False
+                    
+                    str_val = str(val)
+                    if is_missing or str_val in ['N/A', '', '-', 'nan', 'None']:
                         numeric_val = float('-inf') if self.sort_ascending else float('inf')
                     else:
-                        numeric_val = float(val)
+                        numeric_val = float(str_val)
                     numeric_values.append(numeric_val)
                     column_mapping.append(col)
                 except (ValueError, TypeError):
@@ -1327,10 +1343,25 @@ class AnalysisGUI:
                 try:
                     # Try to convert to float
                     val = metric_row[col]
-                    if pd.isna(val) or val in ['N/A', '', '-']:
+                    # Handle pandas scalar values
+                    if hasattr(val, 'item'):
+                        val = val.item()
+                    
+                    # Check for missing or invalid values
+                    try:
+                        is_missing = pd.isna(val)
+                        if hasattr(is_missing, 'any'):
+                            is_missing = bool(is_missing.any())
+                        else:
+                            is_missing = bool(is_missing)
+                    except (TypeError, AttributeError):
+                        is_missing = False
+                    
+                    str_val = str(val)
+                    if is_missing or str_val in ['N/A', '', '-', 'nan', 'None']:
                         numeric_val = float('-inf') if self.sort_ascending else float('inf')
                     else:
-                        numeric_val = float(val)
+                        numeric_val = float(str_val)
                     numeric_values.append(numeric_val)
                     column_mapping.append(col)
                 except (ValueError, TypeError):
@@ -1643,7 +1674,21 @@ class AnalysisGUI:
         
         try:
             analyzer = DynamicRampAnalyzer()
-            timestamp = analyzer.save_analysis_results(self.last_data_package)
+            # Convert StandardDataPackage to dictionary format if needed
+            if hasattr(self.last_data_package, 'time_vector'):
+                # It's a StandardDataPackage, convert to dict
+                data_dict = {
+                    'time_vector': self.last_data_package.time_vector,
+                    'length_vector': self.last_data_package.length_vector,
+                    'variables': self.last_data_package.variables,
+                    'metadata': self.last_data_package.metadata.__dict__ if hasattr(self.last_data_package.metadata, '__dict__') else str(self.last_data_package.metadata),
+                    'format_type': 'StandardDataPackage'
+                }
+                timestamp = analyzer.save_analysis_results(data_dict)
+            else:
+                # It's already a dictionary, but ensure type safety
+                data_dict = dict(self.last_data_package) if isinstance(self.last_data_package, dict) else {}
+                timestamp = analyzer.save_analysis_results(data_dict)
             self.add_terminal_output(f"✓ Analysis results saved with timestamp: {timestamp}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save results: {str(e)}")
@@ -1668,7 +1713,7 @@ class AnalysisGUI:
         analysis_thread.daemon = True
         analysis_thread.start()
     
-    def _show_plot_choice_dialog(self, generated_plots: List[Tuple[str, plt.Figure]]) -> str:
+    def _show_plot_choice_dialog(self, generated_plots: List[Tuple[str, matplotlib.figure.Figure]]) -> str:
         """Show dialog asking user what to do with the generated plots"""
         
         # Create custom dialog - same size as main window
@@ -1764,7 +1809,7 @@ class AnalysisGUI:
         
         return result.get() or "view_and_save"  # Default if dialog closed
     
-    def _save_plots_to_files(self, generated_plots: List[Tuple[str, plt.Figure]], base_filename: str = None) -> str:
+    def _save_plots_to_files(self, generated_plots: List[Tuple[str, matplotlib.figure.Figure]], base_filename: Optional[str] = None) -> str:
         """Save all generated plots to image files"""
         if not base_filename:
             base_filename = os.path.splitext(os.path.basename(self.file_path))[0]
@@ -1791,6 +1836,146 @@ class AnalysisGUI:
         
         print(f"\nPlots saved to: {output_dir}")
         return output_dir
+
+    def _display_plots(self):
+        """Display the generated plots in a tabbed interface"""
+        try:
+            if hasattr(self, 'generated_plots') and self.generated_plots:
+                # Create a new window for the tabbed plot viewer
+                plot_window = tk.Toplevel(self.root)
+                plot_window.title("Analysis Plots")
+                plot_window.geometry("1200x800")
+                
+                # Create notebook for tabs
+                notebook = ttk.Notebook(plot_window)
+                notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+                
+                # Create frame for export buttons
+                button_frame = tk.Frame(plot_window)
+                button_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+                
+                # Export all plots button
+                export_all_btn = tk.Button(
+                    button_frame, 
+                    text="Export All Plots", 
+                    command=lambda: self._export_all_plots_tabbed()
+                )
+                export_all_btn.pack(side=tk.LEFT, padx=(0, 10))
+                
+                # Close window button
+                close_btn = tk.Button(
+                    button_frame, 
+                    text="Close", 
+                    command=plot_window.destroy
+                )
+                close_btn.pack(side=tk.RIGHT)
+                
+                # Store references for export functionality
+                self.plot_tabs = []
+                
+                # Create tabs for each plot
+                for plot_name, fig in self.generated_plots:
+                    # Create frame for this tab
+                    tab_frame = ttk.Frame(notebook)
+                    notebook.add(tab_frame, text=plot_name.replace('_', ' ').title())
+                    
+                    # Create matplotlib canvas
+                    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+                    
+                    canvas = FigureCanvasTkAgg(fig, tab_frame)
+                    canvas.draw()
+                    canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+                    
+                    # Add navigation toolbar
+                    toolbar_frame = tk.Frame(tab_frame)
+                    toolbar_frame.pack(fill=tk.X)
+                    
+                    toolbar = NavigationToolbar2Tk(canvas, toolbar_frame)
+                    toolbar.update()
+                    
+                    # Add export button for individual plot
+                    export_frame = tk.Frame(tab_frame)
+                    export_frame.pack(fill=tk.X, pady=5)
+                    
+                    export_btn = tk.Button(
+                        export_frame,
+                        text=f"Export {plot_name.replace('_', ' ').title()}",
+                        command=lambda p_name=plot_name, p_fig=fig: self._export_single_plot(p_name, p_fig)
+                    )
+                    export_btn.pack(side=tk.RIGHT, padx=10)
+                    
+                    # Store tab info for export
+                    self.plot_tabs.append((plot_name, fig, canvas))
+                
+                # Add keyboard shortcuts
+                plot_window.bind('<Control-w>', lambda e: plot_window.destroy())
+                plot_window.bind('<Control-s>', lambda e: self._export_all_plots_tabbed())
+                plot_window.bind('<Control-e>', lambda e: self._export_current_tab(notebook))
+                
+                # Focus the window
+                plot_window.focus_set()
+                plot_window.lift()
+                
+                self.add_terminal_output(f"Displayed {len(self.generated_plots)} plots in tabbed interface")
+                
+            else:
+                self.add_terminal_output("No plots available to display")
+        except Exception as e:
+            self.add_terminal_output(f"Error displaying plots: {e}")
+            print(f"Plot display error: {e}")
+
+    def _export_single_plot(self, plot_name, figure):
+        """Export a single plot to file"""
+        try:
+            from tkinter import filedialog
+            filetypes = [
+                ("PNG files", "*.png"),
+                ("PDF files", "*.pdf"),
+                ("SVG files", "*.svg"),
+                ("JPG files", "*.jpg"),
+                ("All files", "*.*")
+            ]
+            
+            filename = filedialog.asksaveasfilename(
+                title=f"Save {plot_name.replace('_', ' ').title()}",
+                defaultextension=".png",
+                filetypes=filetypes,
+                initialname=f"{plot_name}.png"
+            )
+            
+            if filename:
+                figure.savefig(filename, dpi=300, bbox_inches='tight')
+                self.add_terminal_output(f"Plot saved: {filename}")
+        except Exception as e:
+            self.add_terminal_output(f"Error saving plot: {e}")
+
+    def _export_all_plots_tabbed(self):
+        """Export all plots from tabbed interface"""
+        try:
+            from tkinter import filedialog
+            import os
+            
+            directory = filedialog.askdirectory(title="Select directory to save all plots")
+            if directory:
+                saved_count = 0
+                for plot_name, figure, _ in self.plot_tabs:
+                    filename = os.path.join(directory, f"{plot_name}.png")
+                    figure.savefig(filename, dpi=300, bbox_inches='tight')
+                    saved_count += 1
+                
+                self.add_terminal_output(f"Saved {saved_count} plots to {directory}")
+        except Exception as e:
+            self.add_terminal_output(f"Error saving plots: {e}")
+
+    def _export_current_tab(self, notebook):
+        """Export the currently selected tab's plot"""
+        try:
+            current_tab = notebook.index(notebook.select())
+            if hasattr(self, 'plot_tabs') and current_tab < len(self.plot_tabs):
+                plot_name, figure, _ = self.plot_tabs[current_tab]
+                self._export_single_plot(plot_name, figure)
+        except Exception as e:
+            self.add_terminal_output(f"Error exporting current tab: {e}")
 
     def _run_analysis_thread(self):
         """Run analysis in separate thread"""
@@ -1839,7 +2024,21 @@ class AnalysisGUI:
                 if success and self.save_results_var.get() and data_package:
                     self.root.after(0, lambda: self.status_label.config(text="Saving results..."))
                     self.root.after(0, lambda: self.add_terminal_output("Saving results..."))
-                    timestamp = analyzer.save_analysis_results(data_package)
+                    # Convert StandardDataPackage to dictionary format if needed
+                    if hasattr(data_package, 'time_vector'):
+                        # It's a StandardDataPackage, convert to dict
+                        data_dict = {
+                            'time_vector': data_package.time_vector,
+                            'length_vector': data_package.length_vector,
+                            'variables': data_package.variables,
+                            'metadata': data_package.metadata.__dict__ if hasattr(data_package.metadata, '__dict__') else str(data_package.metadata),
+                            'format_type': 'StandardDataPackage'
+                        }
+                        timestamp = analyzer.save_analysis_results(data_dict)
+                    else:
+                        # It's already a dictionary, but ensure type safety
+                        data_dict = dict(data_package) if isinstance(data_package, dict) else {}
+                        timestamp = analyzer.save_analysis_results(data_dict)
                     save_msg = f" Results saved with timestamp: {timestamp}"
                     self.root.after(0, lambda: self.add_terminal_output(f"Results saved with timestamp: {timestamp}"))
                 else:
@@ -1865,18 +2064,30 @@ class AnalysisGUI:
                         # Pass all processed data directly to the analysis engine
                         from analysis_engine import AnalysisEngine
                         engine = AnalysisEngine()
+                        # Set the data package so extract_key_metrics has access to the data
                         engine.data_package = self.processed_data
+                        engine.analysis_package = self.processed_data  # Also set analysis_package for completeness
+                        
+                        # Add file path to the data package if not already present
+                        if 'file_path' not in self.processed_data:
+                            self.processed_data['file_path'] = self.file_path
+                        
                         engine.ramp_params = self.processed_data.get('ramp_params')
                         engine.steady_state_time = self.processed_data.get('steady_state_time')
                         engine.stability_metrics = self.processed_data.get('stability_metrics', {'threshold': 0.05, 'min_rms_rate': 0.0})
                         
                         # Add detailed debugging for metrics extraction
                         self.root.after(0, lambda: self.add_terminal_output("Extracting key metrics..."))
+                        self.root.after(0, lambda: self.add_terminal_output(f"   Engine has data_package: {hasattr(engine, 'data_package') and engine.data_package is not None}"))
+                        self.root.after(0, lambda: self.add_terminal_output(f"   Engine has ramp_params: {hasattr(engine, 'ramp_params') and engine.ramp_params is not None}"))
+                        self.root.after(0, lambda: self.add_terminal_output(f"   Engine has steady_state_time: {hasattr(engine, 'steady_state_time') and engine.steady_state_time is not None}"))
+                        
                         metrics = engine.extract_key_metrics()
                         
                         # Debug metrics type and content
                         print(f"DEBUG: metrics type: {type(metrics)}")
                         print(f"DEBUG: metrics content: {metrics}")
+                        self.root.after(0, lambda: self.add_terminal_output(f"   Extracted {len(metrics)} metric entries"))
                         
                         # Ensure metrics is a dictionary
                         if not isinstance(metrics, dict):
@@ -1973,11 +2184,13 @@ class AnalysisGUI:
             # Handle user choice
             if user_choice == "view_and_save":
                 self.add_terminal_output("Displaying plots...")
+                self._display_plots()
                 self.add_terminal_output("Saving plot images...")
                 saved_dir = self._save_plots_to_files(self.generated_plots)
                 self.add_terminal_output(f"✓ Analysis completed! Plots displayed and images saved to: {os.path.basename(saved_dir)}")
             elif user_choice == "view_only":
                 self.add_terminal_output("Displaying plots...")
+                self._display_plots()
                 self.add_terminal_output("✓ Analysis completed! Plots displayed.")
             elif user_choice == "save_only":
                 self.add_terminal_output("Saving plot images...")
