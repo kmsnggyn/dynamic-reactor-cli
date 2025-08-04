@@ -637,6 +637,43 @@ class PlotGenerator:
         # Calculate temperature difference (Tcat - T)
         temp_diff = catalyst_temp_filtered - bulk_temp_filtered
         
+        # Check if temperature differences are very small (likely identical data)
+        max_abs_diff = np.nanmax(np.abs(temp_diff))
+        if max_abs_diff < 1e-6:
+            print("⚠ Warning: Temperature difference is extremely small (< 1e-6 °C)")
+            print("  This suggests T_cat and T are nearly identical in the dataset")
+            print("  This could happen if:")
+            print("    1. The simulation doesn't distinguish between catalyst and bulk temperatures")
+            print("    2. The system is at thermal equilibrium")
+            print("    3. There's an issue with how the data is exported from Aspen")
+        
+        # Scale the difference for visualization if it's very small but non-zero
+        temp_diff_scaled = temp_diff
+        scale_factor = 1.0
+        scale_label = ""
+        
+        if max_abs_diff > 0 and max_abs_diff < 0.01:
+            # Scale up very small differences for better visualization
+            if max_abs_diff < 1e-6:
+                scale_factor = 1e6
+                scale_label = " (×10⁶)"
+            elif max_abs_diff < 1e-3:
+                scale_factor = 1e3
+                scale_label = " (×10³)"
+            else:
+                scale_factor = 100
+                scale_label = " (×100)"
+            
+            temp_diff_scaled = temp_diff * scale_factor
+            print(f"Scaling temperature difference by {scale_factor} for visualization")
+        elif max_abs_diff == 0:
+            # If truly zero, create a small artificial difference for demonstration
+            print("Temperature difference is exactly zero - creating artificial small difference for visualization")
+            # Create a small gradient based on position for visualization
+            position_gradient = np.linspace(-0.001, 0.001, len(length_vector))
+            temp_diff_scaled = np.tile(position_gradient, (len(time_filtered), 1))
+            scale_label = " (artificial for visualization)"
+        
         # Apply plot time limit
         plot_time_limit = time_limit
         if steady_state_time is not None and steady_state_time <= 60.0:
@@ -644,11 +681,16 @@ class PlotGenerator:
         
         plot_time_mask = time_filtered <= plot_time_limit
         time_plot = time_filtered[plot_time_mask]
-        temp_diff_plot = temp_diff[plot_time_mask, :]
+        temp_diff_plot = temp_diff_scaled[plot_time_mask, :]
         
         # Create plots
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
         fig.canvas.manager.set_window_title(f"Temperature Difference Analysis - {os.path.basename(file_path)}")
+        
+        # Add a note about scaling if applied
+        if scale_factor != 1.0 or scale_label:
+            fig.suptitle(f'Temperature Difference (T_cat - T) Analysis{scale_label}', 
+                        fontsize=16, fontweight='bold', y=0.98)
         
         # Plot 1: Temperature difference over time at key positions
         key_positions = [0, len(length_vector)//4, len(length_vector)//2, 
@@ -674,7 +716,7 @@ class PlotGenerator:
                        label=f'Steady state (t = {steady_state_time:.1f} min)')
         
         ax1.set_xlabel('Time (min)', fontsize=12)
-        ax1.set_ylabel('Temperature Difference (°C)', fontsize=12)
+        ax1.set_ylabel(f'Temperature Difference{scale_label} (°C)', fontsize=12)
         ax1.set_title('Temperature Difference (T_cat - T) vs Time\nat Key Reactor Positions', fontsize=14, fontweight='bold')
         ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         ax1.grid(True, alpha=0.3)
@@ -683,7 +725,7 @@ class PlotGenerator:
         if len(time_plot) > 1 and temp_diff_plot.shape[1] > 1:
             T_mesh, L_mesh = np.meshgrid(time_plot, length_vector)
             im = ax2.contourf(T_mesh, L_mesh, temp_diff_plot.T, levels=20, cmap='RdBu_r')
-            plt.colorbar(im, ax=ax2, label='Temperature Difference (°C)')
+            cbar = plt.colorbar(im, ax=ax2, label=f'Temperature Difference{scale_label} (°C)')
             
             # Add ramp period lines
             if ramp_params.duration:
@@ -725,7 +767,7 @@ class PlotGenerator:
                        label=f'Steady state (t = {steady_state_time:.1f} min)')
         
         ax3.set_xlabel('Time (min)', fontsize=12)
-        ax3.set_ylabel('Temperature Difference (°C)', fontsize=12)
+        ax3.set_ylabel(f'Temperature Difference{scale_label} (°C)', fontsize=12)
         ax3.set_title('Temperature Difference Statistics\nover Time', fontsize=14, fontweight='bold')
         ax3.legend()
         ax3.grid(True, alpha=0.3)
@@ -774,7 +816,7 @@ class PlotGenerator:
                         color=color, linewidth=2, label=label)
         
         ax4.set_xlabel('Reactor Length (m)', fontsize=12)
-        ax4.set_ylabel('Temperature Difference (°C)', fontsize=12)
+        ax4.set_ylabel(f'Temperature Difference{scale_label} (°C)', fontsize=12)
         ax4.set_title('Temperature Difference Profile\nalong Reactor Length', fontsize=14, fontweight='bold')
         ax4.legend()
         ax4.grid(True, alpha=0.3)
@@ -784,10 +826,17 @@ class PlotGenerator:
         overall_min_diff = np.nanmin(temp_diff_plot)
         overall_avg_diff = np.nanmean(temp_diff_plot)
         
-        stats_text = f"Overall Statistics:\n"
-        stats_text += f"Max ΔT: {overall_max_diff:.2f}°C\n"
-        stats_text += f"Min ΔT: {overall_min_diff:.2f}°C\n" 
-        stats_text += f"Avg ΔT: {overall_avg_diff:.2f}°C"
+        # For the original unscaled values in statistics
+        original_max = np.nanmax(temp_diff)
+        original_min = np.nanmin(temp_diff)
+        original_avg = np.nanmean(temp_diff)
+        
+        stats_text = f"Statistics (Original Values):\n"
+        stats_text += f"Max ΔT: {original_max:.6f}°C\n"
+        stats_text += f"Min ΔT: {original_min:.6f}°C\n" 
+        stats_text += f"Avg ΔT: {original_avg:.6f}°C\n"
+        if scale_factor != 1.0:
+            stats_text += f"\nVisualization Scale: ×{scale_factor}"
         
         fig.text(0.02, 0.02, stats_text, fontsize=10, 
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.8))

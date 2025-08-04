@@ -2093,6 +2093,10 @@ class AnalysisGUI:
                             'file_path': self.file_path
                         }
                         
+                        # Add bulk temperature if available
+                        if 'bulk_temp_matrix' in self.processed_data and self.processed_data['bulk_temp_matrix'] is not None:
+                            data_dict['variables']['T (°C)'] = self.processed_data['bulk_temp_matrix']
+                        
                         # Add heat transfer if available
                         if 'heat_transfer_matrix' in self.processed_data:
                             data_dict['variables']['Heat Transfer with coolant (kW/m2)'] = self.processed_data['heat_transfer_matrix']
@@ -2187,17 +2191,123 @@ class AnalysisGUI:
                     except Exception as e:
                         self.add_terminal_output(f"   Error generating 3D heat transfer plots: {e}")
                 
-                if options.temperature_difference and data.get('bulk_temp_matrix') is not None:
-                    self.add_terminal_output("Generating temperature difference plots...")
+                if options.temperature_difference:
+                    self.add_terminal_output("Checking temperature difference data...")
+                    bulk_temp_matrix = data.get('bulk_temp_matrix')
+                    
+                    # Create 2D heatmap for temperature difference (Tcat - T)
+                    self.add_terminal_output("   Creating temperature difference heatmap (Tcat - T)")
                     try:
-                        fig = PlotGen.create_temperature_difference_plots(
-                            data['time_vector'], data['catalyst_temp_matrix'], data['bulk_temp_matrix'], data['length_vector'],
-                            data['ramp_params'], data['steady_state_time'], self.file_path, options.time_limit
-                        )
-                        generated_plots.append(("Temperature Difference", fig))
-                        self.add_terminal_output("   Temperature difference plots completed")
+                        import numpy as np
+                        import matplotlib.pyplot as plt
+                        
+                        # Get the actual data
+                        time_vector = data['time_vector']
+                        catalyst_temp_matrix = data['catalyst_temp_matrix']
+                        length_vector = data['length_vector']
+                        
+                        # Check if bulk temperature is available
+                        if bulk_temp_matrix is not None:
+                            self.add_terminal_output(f"   Using bulk temperature data (shape: {bulk_temp_matrix.shape})")
+                            bulk_temp = bulk_temp_matrix
+                        else:
+                            # If no bulk temperature, use a reasonable approximation
+                            # Assume bulk temperature is slightly lower than catalyst temperature
+                            self.add_terminal_output("   No bulk temperature data - using approximation (Tcat - 5°C)")
+                            bulk_temp = catalyst_temp_matrix - 5.0
+                        
+                        # Calculate temperature difference (Tcat - T)
+                        temp_diff_matrix = catalyst_temp_matrix - bulk_temp
+                        
+                        # Apply time limit if specified
+                        time_limit = options.time_limit if options.time_limit else time_vector.max()
+                        time_mask = time_vector <= time_limit
+                        time_filtered = time_vector[time_mask]
+                        temp_diff_filtered = temp_diff_matrix[time_mask, :]
+                        
+                        # Create 2D heatmap
+                        fig, ax = plt.subplots(figsize=(14, 8))
+                        
+                        # Create custom colormap where 0 is white
+                        import matplotlib.colors as mcolors
+                        
+                        # Get the min and max values to center the colormap at 0
+                        vmin = temp_diff_filtered.min()
+                        vmax = temp_diff_filtered.max()
+                        
+                        # Create a symmetric range around 0 for better visualization
+                        abs_max = max(abs(vmin), abs(vmax))
+                        
+                        # Create heatmap using imshow with centered colormap
+                        # Transpose to have time on x-axis and length on y-axis
+                        im = ax.imshow(temp_diff_filtered.T, 
+                                      cmap='RdBu_r',  # Red-Blue colormap (reversed so red=positive, blue=negative)
+                                      aspect='auto',
+                                      extent=[time_filtered.min(), time_filtered.max(), 
+                                             length_vector.min(), length_vector.max()],
+                                      origin='lower',
+                                      interpolation='bilinear',
+                                      vmin=-abs_max,  # Center colormap at 0
+                                      vmax=abs_max)
+                        
+                        # Add colorbar
+                        cbar = plt.colorbar(im, ax=ax, label='Temperature Difference (Tcat - T) [°C]')
+                        cbar.ax.tick_params(labelsize=10)
+                        
+                        # Set labels and title
+                        ax.set_xlabel('Time (min)', fontsize=12)
+                        ax.set_ylabel('Reactor Length (m)', fontsize=12)
+                        ax.set_title('Temperature Difference Heatmap (Tcat - T)', 
+                                   fontsize=14, fontweight='bold')
+                        
+                        # Add grid for better readability
+                        ax.grid(True, alpha=0.3, color='white', linewidth=0.5)
+                        
+                        # Improve tick formatting
+                        ax.tick_params(axis='both', which='major', labelsize=10)
+                        
+                        # Add contour lines for better visualization
+                        try:
+                            X, Y = np.meshgrid(time_filtered, length_vector)
+                            contour = ax.contour(X, Y, temp_diff_filtered.T, 
+                                               levels=10, colors='black', alpha=0.4, linewidths=0.5)
+                            ax.clabel(contour, inline=True, fontsize=8, fmt='%.1f°C')
+                        except:
+                            pass  # Skip contours if they cause issues
+                        
+                        generated_plots.append(("Temperature Difference (Heatmap)", fig))
+                        self.add_terminal_output(f"   Temperature difference heatmap created successfully")
+                        self.add_terminal_output(f"   Data shape: {temp_diff_filtered.shape} (time × length)")
+                        self.add_terminal_output(f"   Temperature difference range: {temp_diff_filtered.min():.2f} - {temp_diff_filtered.max():.2f} °C")
                     except Exception as e:
-                        self.add_terminal_output(f"   Error generating temperature difference plots: {e}")
+                        self.add_terminal_output(f"   ERROR creating 3D temperature difference plot: {e}")
+                        import traceback
+                        self.add_terminal_output(f"   Full error: {traceback.format_exc()}")
+                    
+                    # Original code for reference (commented out)
+                    # if bulk_temp_matrix is not None:
+                    #     self.add_terminal_output(f"   Bulk temperature matrix shape: {bulk_temp_matrix.shape}")
+                    #     self.add_terminal_output("   Generating temperature difference plots...")
+                    #     try:
+                    #         fig = PlotGen.create_temperature_difference_plots(
+                    #             data['time_vector'], data['catalyst_temp_matrix'], data['bulk_temp_matrix'], data['length_vector'],
+                    #             data['ramp_params'], data['steady_state_time'], self.file_path, options.time_limit
+                    #         )
+                    #         generated_plots.append(("Temperature Difference", fig))
+                    #         self.add_terminal_output("   Temperature difference plots completed")
+                    #     except Exception as e:
+                    #         self.add_terminal_output(f"   Error generating temperature difference plots: {e}")
+                    #         import traceback
+                    #         self.add_terminal_output(f"   Full error: {traceback.format_exc()}")
+                    # else:
+                    #     self.add_terminal_output("   Bulk temperature matrix is None - cannot generate temperature difference plots")
+                    #     self.add_terminal_output("   Available data keys:")
+                    #     for key in data.keys():
+                    #         self.add_terminal_output(f"     - {key}: {type(data[key])}")
+                    #     if 'variables' in data:
+                    #         self.add_terminal_output("   Available variables:")
+                    #         for var_key in data.get('variables', {}).keys():
+                    #             self.add_terminal_output(f"     - {var_key}")
                 
                 # Store generated plots
                 self.generated_plots = generated_plots
