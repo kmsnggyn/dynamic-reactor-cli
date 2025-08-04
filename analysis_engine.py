@@ -85,6 +85,7 @@ class AnalysisOptions:
     stability_analysis: bool = True
     spatial_gradients: bool = True
     heat_transfer_3d: bool = True
+    temperature_difference: bool = True
     time_limit: Optional[float] = None
 
 # Import data loading functionality from dedicated module

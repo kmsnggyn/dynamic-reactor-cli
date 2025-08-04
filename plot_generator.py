@@ -615,6 +615,189 @@ class PlotGenerator:
         return fig
     
     @staticmethod
+    def create_temperature_difference_plots(time_vector: np.ndarray,
+                                           catalyst_temp_matrix: np.ndarray,
+                                           bulk_temp_matrix: np.ndarray,
+                                           length_vector: np.ndarray,
+                                           ramp_params: RampParameters,
+                                           steady_state_time: Optional[float],
+                                           file_path: str,
+                                           time_limit: Optional[float] = None) -> plt.Figure:
+        """Create temperature difference (Tcat - T) analysis plots"""
+        
+        # Filter data
+        if time_limit is None:
+            time_limit = time_vector.max()
+            
+        time_mask = time_vector <= time_limit
+        time_filtered = time_vector[time_mask]
+        catalyst_temp_filtered = catalyst_temp_matrix[time_mask, :]
+        bulk_temp_filtered = bulk_temp_matrix[time_mask, :]
+        
+        # Calculate temperature difference (Tcat - T)
+        temp_diff = catalyst_temp_filtered - bulk_temp_filtered
+        
+        # Apply plot time limit
+        plot_time_limit = time_limit
+        if steady_state_time is not None and steady_state_time <= 60.0:
+            plot_time_limit = min(60.0, time_limit)
+        
+        plot_time_mask = time_filtered <= plot_time_limit
+        time_plot = time_filtered[plot_time_mask]
+        temp_diff_plot = temp_diff[plot_time_mask, :]
+        
+        # Create plots
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig.canvas.manager.set_window_title(f"Temperature Difference Analysis - {os.path.basename(file_path)}")
+        
+        # Plot 1: Temperature difference over time at key positions
+        key_positions = [0, len(length_vector)//4, len(length_vector)//2, 
+                        3*len(length_vector)//4, len(length_vector)-1]
+        colors = ['red', 'orange', 'green', 'blue', 'purple']
+        
+        for i, pos_idx in enumerate(key_positions):
+            if pos_idx < temp_diff_plot.shape[1]:
+                pos_label = f"L = {length_vector[pos_idx]:.3f} m"
+                ax1.plot(time_plot, temp_diff_plot[:, pos_idx], 
+                        color=colors[i], linewidth=2, label=pos_label)
+        
+        # Add ramp period shading
+        if ramp_params.duration:
+            ax1.axvspan(ramp_params.start_time, ramp_params.end_time, 
+                       alpha=0.2, color='gray', 
+                       label=f'Ramp period ({ramp_params.duration} min)')
+        
+        # Add steady state line
+        if steady_state_time is not None:
+            ax1.axvline(x=steady_state_time, color='green', linestyle='-', 
+                       alpha=0.8, linewidth=2, 
+                       label=f'Steady state (t = {steady_state_time:.1f} min)')
+        
+        ax1.set_xlabel('Time (min)', fontsize=12)
+        ax1.set_ylabel('Temperature Difference (°C)', fontsize=12)
+        ax1.set_title('Temperature Difference (T_cat - T) vs Time\nat Key Reactor Positions', fontsize=14, fontweight='bold')
+        ax1.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot 2: Contour plot of temperature difference
+        if len(time_plot) > 1 and temp_diff_plot.shape[1] > 1:
+            T_mesh, L_mesh = np.meshgrid(time_plot, length_vector)
+            im = ax2.contourf(T_mesh, L_mesh, temp_diff_plot.T, levels=20, cmap='RdBu_r')
+            plt.colorbar(im, ax=ax2, label='Temperature Difference (°C)')
+            
+            # Add ramp period lines
+            if ramp_params.duration:
+                ax2.axvline(x=ramp_params.start_time, color='black', linestyle='--', alpha=0.7)
+                ax2.axvline(x=ramp_params.end_time, color='black', linestyle='--', alpha=0.7)
+            
+            # Add steady state line
+            if steady_state_time is not None:
+                ax2.axvline(x=steady_state_time, color='green', linestyle='-', alpha=0.8, linewidth=2)
+            
+            ax2.set_xlabel('Time (min)', fontsize=12)
+            ax2.set_ylabel('Reactor Length (m)', fontsize=12)
+            ax2.set_title('Temperature Difference Contour\n(T_cat - T)', fontsize=14, fontweight='bold')
+        else:
+            ax2.text(0.5, 0.5, 'Insufficient data for contour plot', 
+                    ha='center', va='center', transform=ax2.transAxes)
+            ax2.set_title('Temperature Difference Contour\n(T_cat - T)', fontsize=14, fontweight='bold')
+        
+        # Plot 3: Maximum temperature difference over time
+        max_temp_diff = np.nanmax(temp_diff_plot, axis=1)
+        min_temp_diff = np.nanmin(temp_diff_plot, axis=1)
+        avg_temp_diff = np.nanmean(temp_diff_plot, axis=1)
+        
+        ax3.plot(time_plot, max_temp_diff, 'red', linewidth=2, label='Maximum ΔT')
+        ax3.plot(time_plot, avg_temp_diff, 'orange', linewidth=2, label='Average ΔT')
+        ax3.plot(time_plot, min_temp_diff, 'blue', linewidth=2, label='Minimum ΔT')
+        ax3.fill_between(time_plot, min_temp_diff, max_temp_diff, alpha=0.2, color='gray')
+        
+        # Add ramp period shading
+        if ramp_params.duration:
+            ax3.axvspan(ramp_params.start_time, ramp_params.end_time, 
+                       alpha=0.2, color='yellow', 
+                       label=f'Ramp period ({ramp_params.duration} min)')
+        
+        # Add steady state line
+        if steady_state_time is not None:
+            ax3.axvline(x=steady_state_time, color='green', linestyle='-', 
+                       alpha=0.8, linewidth=2, 
+                       label=f'Steady state (t = {steady_state_time:.1f} min)')
+        
+        ax3.set_xlabel('Time (min)', fontsize=12)
+        ax3.set_ylabel('Temperature Difference (°C)', fontsize=12)
+        ax3.set_title('Temperature Difference Statistics\nover Time', fontsize=14, fontweight='bold')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+        
+        # Plot 4: Temperature difference profile at different times
+        if ramp_params.duration:
+            # Show profiles at start, middle, end of ramp, and steady state
+            profile_times = []
+            profile_labels = []
+            profile_colors = []
+            
+            # Start of ramp
+            start_idx = np.argmin(np.abs(time_plot - ramp_params.start_time))
+            profile_times.append(start_idx)
+            profile_labels.append(f't = {ramp_params.start_time:.1f} min (ramp start)')
+            profile_colors.append('blue')
+            
+            # Middle of ramp
+            mid_time = (ramp_params.start_time + ramp_params.end_time) / 2
+            mid_idx = np.argmin(np.abs(time_plot - mid_time))
+            profile_times.append(mid_idx)
+            profile_labels.append(f't = {mid_time:.1f} min (ramp mid)')
+            profile_colors.append('orange')
+            
+            # End of ramp
+            end_idx = np.argmin(np.abs(time_plot - ramp_params.end_time))
+            profile_times.append(end_idx)
+            profile_labels.append(f't = {ramp_params.end_time:.1f} min (ramp end)')
+            profile_colors.append('red')
+            
+            # Steady state (if available)
+            if steady_state_time is not None and steady_state_time <= plot_time_limit:
+                ss_idx = np.argmin(np.abs(time_plot - steady_state_time))
+                profile_times.append(ss_idx)
+                profile_labels.append(f't = {steady_state_time:.1f} min (steady state)')
+                profile_colors.append('green')
+        else:
+            # For non-ramp data, show profiles at key times
+            profile_times = [0, len(time_plot)//4, len(time_plot)//2, 3*len(time_plot)//4, len(time_plot)-1]
+            profile_labels = [f't = {time_plot[idx]:.1f} min' for idx in profile_times]
+            profile_colors = ['blue', 'cyan', 'orange', 'red', 'purple']
+        
+        for i, (time_idx, label, color) in enumerate(zip(profile_times, profile_labels, profile_colors)):
+            if time_idx < temp_diff_plot.shape[0]:
+                ax4.plot(length_vector, temp_diff_plot[time_idx, :], 
+                        color=color, linewidth=2, label=label)
+        
+        ax4.set_xlabel('Reactor Length (m)', fontsize=12)
+        ax4.set_ylabel('Temperature Difference (°C)', fontsize=12)
+        ax4.set_title('Temperature Difference Profile\nalong Reactor Length', fontsize=14, fontweight='bold')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+        
+        # Add overall statistics as text
+        overall_max_diff = np.nanmax(temp_diff_plot)
+        overall_min_diff = np.nanmin(temp_diff_plot)
+        overall_avg_diff = np.nanmean(temp_diff_plot)
+        
+        stats_text = f"Overall Statistics:\n"
+        stats_text += f"Max ΔT: {overall_max_diff:.2f}°C\n"
+        stats_text += f"Min ΔT: {overall_min_diff:.2f}°C\n" 
+        stats_text += f"Avg ΔT: {overall_avg_diff:.2f}°C"
+        
+        fig.text(0.02, 0.02, stats_text, fontsize=10, 
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray", alpha=0.8))
+        
+        plt.tight_layout()
+        plt.subplots_adjust(bottom=0.15)  # Make room for statistics text
+        
+        return fig
+    
+    @staticmethod
     def generate_all_plots(analysis_results: Dict[str, Any]) -> List[Tuple[str, plt.Figure]]:
         """Generate all requested plots based on analysis results"""
         plots = []
@@ -663,5 +846,15 @@ class PlotGenerator:
                     steady_state_time, file_path, options.time_limit
                 )
                 plots.append(("3D Heat Transfer Analysis", fig))
+        
+        # Temperature Difference Analysis
+        if options.temperature_difference:
+            bulk_temp = data_package['variables'].get('T (°C)')
+            if bulk_temp is not None:
+                fig = PlotGenerator.create_temperature_difference_plots(
+                    time_vector, catalyst_temp, bulk_temp, length_vector,
+                    ramp_params, steady_state_time, file_path, options.time_limit
+                )
+                plots.append(("Temperature Difference Analysis", fig))
         
         return plots

@@ -138,7 +138,8 @@ class AnalysisGUI:
             'temperature_response': tk.BooleanVar(value=True),
             'stability_analysis': tk.BooleanVar(value=True),
             'spatial_gradients': tk.BooleanVar(value=True),
-            'heat_transfer_3d': tk.BooleanVar(value=True)
+            'heat_transfer_3d': tk.BooleanVar(value=True),
+            'temperature_difference': tk.BooleanVar(value=True)
         }
         
         # Store data for saving
@@ -246,7 +247,8 @@ class AnalysisGUI:
             'temperature_response': 'Temperature Response Analysis',
             'stability_analysis': 'Stability Analysis',
             'spatial_gradients': 'Spatial Temperature Gradients',
-            'heat_transfer_3d': '3D Heat Transfer Analysis'
+            'heat_transfer_3d': '3D Heat Transfer Analysis',
+            'temperature_difference': 'Temperature Difference (Tcat - T)'
         }
         
         row = 1
@@ -474,7 +476,7 @@ class AnalysisGUI:
         
         # Instructions label
         instructions = ttk.Label(bottom_controls, 
-                                text="Right-click column header to remove • Double-click metric name to sort columns • Data columns are resizable • Metric/Units columns are fixed width • Use filters to show/hide specific experiment types",
+                                text="Right-click column header to remove • Click sort indicator to sort columns • Data columns are resizable • Metric/Units columns are fixed width • Use filters to show/hide specific experiment types",
                                 font=('Arial', 8), foreground='gray')
         instructions.pack(pady=(10, 0))
     
@@ -1850,6 +1852,7 @@ class AnalysisGUI:
             stability_analysis=self.plot_vars['stability_analysis'].get(),
             spatial_gradients=self.plot_vars['spatial_gradients'].get(),
             heat_transfer_3d=self.plot_vars['heat_transfer_3d'].get(),
+            temperature_difference=self.plot_vars['temperature_difference'].get(),
             time_limit=time_limit
         )
     
@@ -2184,6 +2187,18 @@ class AnalysisGUI:
                     except Exception as e:
                         self.add_terminal_output(f"   Error generating 3D heat transfer plots: {e}")
                 
+                if options.temperature_difference and data.get('bulk_temp_matrix') is not None:
+                    self.add_terminal_output("Generating temperature difference plots...")
+                    try:
+                        fig = PlotGen.create_temperature_difference_plots(
+                            data['time_vector'], data['catalyst_temp_matrix'], data['bulk_temp_matrix'], data['length_vector'],
+                            data['ramp_params'], data['steady_state_time'], self.file_path, options.time_limit
+                        )
+                        generated_plots.append(("Temperature Difference", fig))
+                        self.add_terminal_output("   Temperature difference plots completed")
+                    except Exception as e:
+                        self.add_terminal_output(f"   Error generating temperature difference plots: {e}")
+                
                 # Store generated plots
                 self.generated_plots = generated_plots
                 
@@ -2297,6 +2312,7 @@ class DynamicRampAnalyzer:
             # Extract data
             time_vector = data_package['time_vector']
             catalyst_temp_matrix = data_package['variables']['T_cat (°C)']
+            bulk_temp_matrix = data_package['variables'].get('T (°C)')
             length_vector = data_package['length_vector']
             
             # Detect steady state
@@ -2343,6 +2359,7 @@ class DynamicRampAnalyzer:
             self.processed_data = {
                 'time_vector': time_vector,
                 'catalyst_temp_matrix': catalyst_temp_matrix,
+                'bulk_temp_matrix': bulk_temp_matrix,
                 'length_vector': length_vector,
                 'ramp_params': ramp_params,
                 'steady_state_time': steady_state_time,
@@ -2401,6 +2418,7 @@ class DynamicRampAnalyzer:
             # Extract data
             time_vector = data_package['time_vector']
             catalyst_temp_matrix = data_package['variables']['T_cat (°C)']
+            bulk_temp_matrix = data_package['variables'].get('T (°C)')
             length_vector = data_package['length_vector']
             
             # Detect steady state
@@ -2484,6 +2502,21 @@ class DynamicRampAnalyzer:
                         print("⚠ Heat transfer data not available for 3D plotting")
                 except Exception as e:
                     print(f"❌ Error generating 3D heat transfer plots: {e}")
+            
+            if options.temperature_difference:
+                print("📊 Generating temperature difference plots...")
+                try:
+                    if bulk_temp_matrix is not None:
+                        fig = PlotGen.create_temperature_difference_plots(
+                            time_vector, catalyst_temp_matrix, bulk_temp_matrix, length_vector,
+                            ramp_params, steady_state_time, file_path, options.time_limit
+                        )
+                        self.generated_plots.append(("Temperature Difference", fig))
+                        print("✓ Temperature difference plots completed")
+                    else:
+                        print("⚠ Bulk temperature data not available for difference plotting")
+                except Exception as e:
+                    print(f"❌ Error generating temperature difference plots: {e}")
             
             # Check if any plots were generated
             if self.generated_plots:
