@@ -1,44 +1,47 @@
-# Dynamic Reactor Ramp Analysis Tool
 
-A GUI tool for analyzing Aspen Plus dynamic reactor simulation data with automated ramp detection and comprehensive visualization.
+# Dynamic Reactor Ramp Analysis Tool (CLI-Only)
 
-**Author:** Seonggyun Kim (seonggyun.kim@outlook.com) | **License:** MIT | **Python:** 3.7+
+A minimal, scriptable command-line tool for analyzing Aspen Plus dynamic reactor simulation data. This version is headless (no GUI, no plotting) and designed for batch or automated workflows.
+
+**Author:** Seonggyun Kim (seonggyun.kim@outlook.com)  
+**License:** MIT  
+**Python:** 3.7+
+
+---
 
 ## Quick Start
 
 ```bash
 # Install dependencies
-pip install matplotlib pandas numpy seaborn scipy
+pip install -r requirements.txt
 
-# Test installation
-python test_setup.py
-
-# Launch application
-python main_gui.py
+# Run analysis on your data
+python ramp_cli.py path/to/your_data.csv
 ```
 
-## Usage Workflow
+---
+
+## Usage
 
 ### 1. Prepare Data in Aspen Plus
-1. Create **Flowsheet Form** with:
-   - **X-axis**: `L_Profile(*)` (reactor length)
-   - **Y-axis**: `T_cat(*)~1`, `T(*)~1`, `Q_flux(*)~1`, `Q_cat(*)~1`, reaction rates
+1. Create a **Flowsheet Form** with:
+    - **X-axis**: `L_Profile(*)` (reactor length)
+    - **Y-axis**: `T_cat(*)~1`, `T(*)~1`, `Q_flux(*)~1`, `Q_cat(*)~1`, reaction rates
 2. Run dynamic simulation
-3. Copy/paste table data to CSV file
-4. Name file: `{duration}-{direction}-{curve}.csv` (e.g., `30-up-r.csv`)
+3. Export or copy/paste table data to a CSV file
+4. Name the file: `{duration}-{direction}-{curve}.csv` (e.g., `30-up-r.csv`)
 
-### 2. Run Analysis
-1. Launch GUI: `python main_gui.py`
-2. Select CSV file
-3. Choose plot types and options
-4. Click "Run Analysis"
+### 2. Run CLI Analysis
+```bash
+python ramp_cli.py path/to/your_data.csv
+# Optional arguments:
+#   --output-dir <folder>   # Output directory (default: <csv_basename>_analysis)
+#   --time-limit <minutes>  # Max time to include in analysis
+```
 
-## Features
+The tool will load the CSV, run the analysis, and save results (vectors, summary) to disk.
 
-- **4 Analysis Types**: Temperature response, stability, spatial gradients, 3D heat transfer
-- **Auto Ramp Detection**: From filename (`30-up-r.csv` = 30-min linear ramp-up)
-- **Export Options**: CSV matrices, vectors, summary reports
-- **Modular Architecture**: Separate GUI, analysis, plotting, and results modules
+---
 
 ## File Requirements
 
@@ -53,17 +56,13 @@ python main_gui.py
 - Direction: `up` or `down`
 - Curve: `r` (linear) or `s` (sinusoidal)
 
+---
+
 ## Troubleshooting
 
-**Aspen Plus:**
-- Include all required variables in flowsheet form
-- Ensure `L_Profile(*)` is set as reactor length coordinate
-- Complete dynamic simulation before export
-
-**Application:**
 - Check console output for detailed errors
 - Verify CSV format matches Aspen Plus export
-- Select at least one plot type
+- Ensure Python and dependencies are installed
 
 ---
 

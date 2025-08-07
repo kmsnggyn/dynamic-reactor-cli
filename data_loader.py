@@ -276,11 +276,11 @@ class AspenDynamicsParser:
             
             # Expected variables in order
             expected_variables = [
-                "T_cat (°C)",
-                "T (°C)", 
-                "Reaction Rate (kmol/m3/hr)",
-                "Heat Transfer to Catalyst (GJ/m3/hr)",
-                "Heat Transfer with coolant (kW/m2)"
+                "T_cat",
+                "T_str", 
+                "r",
+                "Q_cat",
+                "q"
             ]
             
             # Initialize matrices
@@ -309,11 +309,11 @@ class AspenDynamicsParser:
             
             # Create metadata
             units = {
-                "T_cat (°C)": "°C",
-                "T (°C)": "°C",
-                "Reaction Rate (kmol/m3/hr)": "kmol/m³/hr",
-                "Heat Transfer to Catalyst (GJ/m3/hr)": "GJ/m³/hr",
-                "Heat Transfer with coolant (kW/m2)": "kW/m²"
+                "T_cat": "°C",
+                "T_str": "°C",
+                "r": "kmol/m³/hr",
+                "Q_cat": "GJ/m³/hr",
+                "q": "kW/m²"
             }
             
             # Extract timestamp and ramp parameters from filename
