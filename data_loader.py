@@ -1,12 +1,9 @@
 """
-Data Loader Module for Dynamic Reactor Analysis
-==============================================
+Dynamic Reactor Data Loader Module
+=================================
 
-Handles loading and parsing of various CSV data formats into standardized data structures.
-Supports multiple formats and provides extensible framework for new formats.
-
-Author: Seonggyun Kim (seonggyun.kim@outlook.com)
-Date: August 2025
+Comprehensive data loading system for reactor analysis supporting multiple CSV formats.
+Provides unified interface for Aspen Plus Dynamics and generic time-series data.
 """
 
 import os
@@ -17,54 +14,29 @@ from typing import Optional, Dict, List, Tuple, Any
 from dataclasses import dataclass
 from enum import Enum
 
-# Data Loading Configuration Constants
-MIN_NUMERIC_COLUMN_RATIO = 0.8  # Minimum ratio of numeric values to consider a column valid
-ASPEN_ROW_BLOCK_SIZE = 6  # Number of rows per time block in Aspen Dynamics format
-DEFAULT_RAMP_START_TIME = 10.0  # Default ramp start time in minutes
-MIN_DIGIT_COUNT_TIMESTAMP = 8  # Minimum digits for timestamp detection
-TIMESTAMP_PATTERN = r'(\d{8}-\d{6})'  # Pattern for YYYYMMDD-HHMMSS format
+# Configuration Constants
+MIN_NUMERIC_COLUMN_RATIO = 0.8
+ASPEN_ROW_BLOCK_SIZE = 6
+DEFAULT_RAMP_START_TIME = 10.0
+MIN_DIGIT_COUNT_TIMESTAMP = 8
+TIMESTAMP_PATTERN = r'(\d{8}-\d{6})'
+
 
 def extract_timestamp_from_filename(file_path: str) -> Optional[str]:
-    """
-    Extract timestamp from filename in format YYYYMMDD-HHMMSS.
-    
-    Args:
-        file_path: Path to the file with timestamp in filename
-        
-    Returns:
-        Extracted timestamp string or None if not found
-        
-    Example:
-        >>> extract_timestamp_from_filename('data_20250804-143022.csv')
-        '20250804-143022'
-    """
+    """Extract timestamp from filename in format YYYYMMDD-HHMMSS."""
     filename = os.path.basename(file_path)
-    # Look for pattern: 8 digits, hyphen, 6 digits (YYYYMMDD-HHMMSS)
     match = re.search(TIMESTAMP_PATTERN, filename)
     return match.group(1) if match else None
 
+
 def extract_ramp_parameters_from_filename(file_path: str) -> Optional[Dict[str, Any]]:
-    """
-    Extract ramp parameters from filename in format: duration-direction-curve_shape.
-    
-    Args:
-        file_path: Path to the file with ramp parameters in filename
-        
-    Returns:
-        Dictionary with extracted parameters or None if parsing fails
-        
-    Example:
-        >>> extract_ramp_parameters_from_filename('36-down-s-20250804-143022.csv')
-        {'duration': 36, 'direction': 'down', 'curve_shape': 's', 'start_time': 10.0, 'end_time': 46.0}
-    """
+    """Extract ramp parameters from filename format: duration-direction-curve_shape."""
     filename = os.path.basename(file_path).lower()
     filename_parts = filename.replace('.csv', '').split('-')
     
-    # Remove timestamp parts (8+ digits)
-    clean_parts = []
-    for part in filename_parts:
-        if not (part.isdigit() and len(part) >= MIN_DIGIT_COUNT_TIMESTAMP):
-            clean_parts.append(part)
+    # Remove timestamp parts
+    clean_parts = [part for part in filename_parts 
+                   if not (part.isdigit() and len(part) >= MIN_DIGIT_COUNT_TIMESTAMP)]
     
     if len(clean_parts) >= 3:
         try:
@@ -76,7 +48,7 @@ def extract_ramp_parameters_from_filename(file_path: str) -> Optional[Dict[str, 
                 'duration': duration,
                 'direction': direction,
                 'curve_shape': curve_shape,
-                'start_time': DEFAULT_RAMP_START_TIME,  # Default start time
+                'start_time': DEFAULT_RAMP_START_TIME,
                 'end_time': DEFAULT_RAMP_START_TIME + duration
             }
         except (ValueError, IndexError):
@@ -91,46 +63,16 @@ def extract_ramp_parameters_from_filename(file_path: str) -> Optional[Dict[str, 
     
     return ramp_info if ramp_info else None
 
+
 class DataFormat(Enum):
-    """
-    Enumeration of supported data formats.
-    
-    Defines the different CSV formats that can be parsed by the data loader.
-    Each format has its own specialized parser that can handle the specific
-    structure and conventions of that format.
-    """
+    """Supported data formats."""
     ASPEN_PLUS_DYNAMICS = "aspen_dynamics"
     GENERIC_TIME_SERIES = "generic_timeseries"
 
+
 @dataclass
 class DataMetadata:
-    """
-    Metadata container for loaded data with comprehensive information.
-    
-    Stores all relevant metadata about the loaded dataset including format details,
-    dimensions, ranges, and extracted parameters. This metadata is essential for
-    proper analysis and visualization of the reactor data.
-    
-    Attributes:
-        format_type: The detected/used data format
-        source_file: Full path to the original data file
-        dimensions: Dictionary containing data dimensions (n_time, m_length, etc.)
-        time_range: Tuple of (min_time, max_time) in minutes
-        spatial_range: Tuple of (min_position, max_position) in meters, or None
-        variables: List of variable names found in the data
-        units: Dictionary mapping variable names to their units
-        parsing_notes: List of warnings or issues encountered during parsing
-        file_timestamp: Timestamp extracted from filename (YYYYMMDD-HHMMSS format)
-        ramp_parameters: Dictionary with extracted ramp experiment parameters
-        
-    Example:
-        >>> metadata = DataMetadata(
-        ...     format_type=DataFormat.ASPEN_PLUS_DYNAMICS,
-        ...     source_file="reactor_data.csv",
-        ...     dimensions={'n_time': 1000, 'm_length': 50},
-        ...     time_range=(0.0, 100.0)
-        ... )
-    """
+    """Comprehensive metadata container for loaded reactor data."""
     format_type: DataFormat
     source_file: str
     dimensions: Dict[str, int]
@@ -139,60 +81,31 @@ class DataMetadata:
     variables: Optional[List[str]] = None
     units: Optional[Dict[str, str]] = None
     parsing_notes: Optional[List[str]] = None
-    file_timestamp: Optional[str] = None  # Extracted from filename (YYYYMMDD-HHMMSS)
-    ramp_parameters: Optional[Dict[str, Any]] = None  # Extracted ramp experiment parameters
+    file_timestamp: Optional[str] = None
+    ramp_parameters: Optional[Dict[str, Any]] = None
+
 
 @dataclass
 class StandardDataPackage:
-    """
-    Standardized data structure for all supported formats.
-    
-    This class provides a unified interface for reactor data regardless of the
-    original file format. All parsers convert their specific formats into this
-    standard structure, enabling consistent analysis across different data sources.
-    
-    The structure supports both spatial (1D reactor) and non-spatial (lumped) data.
-    For spatial data, variables are 2D matrices [time, position]. For non-spatial
-    data, variables are 2D matrices [time, 1] for consistency.
-    
-    Attributes:
-        time_vector: 1D array of time points in minutes
-        length_vector: 1D array of spatial positions in meters (None for non-spatial)
-        variables: Dictionary mapping variable names to their data matrices
-        metadata: Complete metadata about the data source and parsing
-        
-    Properties:
-        is_spatial: True if data has spatial dimension
-        n_time: Number of time points
-        n_spatial: Number of spatial points (0 for non-spatial)
-        
-    Example:
-        >>> package = StandardDataPackage(
-        ...     time_vector=np.linspace(0, 100, 1000),
-        ...     length_vector=np.linspace(0, 1, 50),
-        ...     variables={'T_cat (°C)': np.random.normal(500, 10, (1000, 50))},
-        ...     metadata=metadata
-        ... )
-        >>> print(f"Data: {package.n_time} times × {package.n_spatial} positions")
-    """
+    """Standardized reactor data structure for unified analysis interface."""
     time_vector: np.ndarray
-    length_vector: Optional[np.ndarray]  # None for non-spatial data
-    variables: Dict[str, np.ndarray]  # Variable name -> data matrix
+    length_vector: Optional[np.ndarray]
+    variables: Dict[str, np.ndarray]
     metadata: DataMetadata
     
     @property
     def is_spatial(self) -> bool:
-        """Check if data has spatial dimension"""
+        """Check if data has spatial dimension."""
         return self.length_vector is not None
     
     @property
     def n_time(self) -> int:
-        """Number of time points"""
+        """Number of time points."""
         return len(self.time_vector)
     
     @property
     def n_spatial(self) -> int:
-        """Number of spatial points (0 if non-spatial)"""
+        """Number of spatial points (0 if non-spatial)."""
         return len(self.length_vector) if self.length_vector is not None else 0
 
 class AspenDynamicsParser:
